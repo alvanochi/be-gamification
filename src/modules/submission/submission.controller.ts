@@ -1,0 +1,44 @@
+import { Request, Response } from 'express';
+import * as submissionService from './submission.service.ts';
+import catchAsync from '../../utils/catchAsync.ts';
+import { sendResponse } from '../../utils/response.ts';
+import type { SubmitMissionInput, ValidateSubmissionInput } from '../../validations/submission.validation.ts';
+import ApiError from '../../utils/ApiError.ts';
+import { db } from '../../db/index.ts';
+import { users } from '../../db/schema/users.ts';
+import { eq } from 'drizzle-orm';
+
+export const getUploadUrl = catchAsync(async (req: Request, res: Response) => {
+  const { fileName, mimeType } = req.query;
+  if (!fileName || !mimeType) {
+    throw ApiError.badRequest('fileName and mimeType are required query parameters');
+  }
+
+  const result = await submissionService.generatePresignedUrl(fileName as string, mimeType as string);
+  sendResponse(res, 200, 'Presigned URL generated', result);
+});
+
+export const submitMission = catchAsync(async (req: Request, res: Response) => {
+  const userId = req.user?.id as string;
+  const user = await db.select().from(users).where(eq(users.id, userId)).limit(1);
+  if (!user.length) throw ApiError.notFound('User not found');
+  if (!user[0].groupId) throw ApiError.badRequest('User must join a group first');
+
+  const data = req.body as SubmitMissionInput;
+  const result = await submissionService.submitMission(user[0].groupId, userId, data);
+  sendResponse(res, 201, 'Mission submitted successfully', result);
+});
+
+export const validateSubmission = catchAsync(async (req: Request, res: Response) => {
+  const { submissionId } = req.params;
+  const validatorId = req.user?.id as string;
+  
+  const user = await db.select().from(users).where(eq(users.id, validatorId)).limit(1);
+  if (!user.length || (user[0].role !== 'ADMIN' && user[0].role !== 'SUPER_ADMIN')) {
+    throw ApiError.forbidden('Only ADMIN or SUPER_ADMIN can validate submissions');
+  }
+
+  const { status } = req.body as ValidateSubmissionInput;
+  await submissionService.validateSubmission(submissionId, status, validatorId);
+  sendResponse(res, 200, `Submission ${status.toLowerCase()} successfully`, null);
+});

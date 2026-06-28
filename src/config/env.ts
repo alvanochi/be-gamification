@@ -16,6 +16,12 @@ const envSchema = Joi.object({
     REFRESH_TOKEN_KEY: Joi.string().required(),
     ACCESS_TOKEN_AGE: Joi.number().default(180),
     REFRESH_TOKEN_AGE: Joi.number().default(10080),
+
+    R2_ACCOUNT_ID: Joi.string().optional(),
+    R2_ACCESS_KEY_ID: Joi.string().optional(),
+    R2_SECRET_ACCESS_KEY: Joi.string().optional(),
+    R2_BUCKET_NAME: Joi.string().optional(),
+    R2_PUBLIC_DOMAIN: Joi.string().optional(),
 }).unknown(true);
 
 const { error, value } = envSchema.validate(process.env);
@@ -39,6 +45,11 @@ const env = value as {
     REFRESH_TOKEN_KEY: string;
     ACCESS_TOKEN_AGE: number;
     REFRESH_TOKEN_AGE: number;
+    R2_ACCOUNT_ID?: string;
+    R2_ACCESS_KEY_ID?: string;
+    R2_SECRET_ACCESS_KEY?: string;
+    R2_BUCKET_NAME?: string;
+    R2_PUBLIC_DOMAIN?: string;
 };
 
 export default env;

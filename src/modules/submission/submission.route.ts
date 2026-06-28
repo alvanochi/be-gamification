@@ -1,0 +1,15 @@
+import { Router } from 'express';
+import * as submissionController from './submission.controller.ts';
+import authenticate from '../../middlewares/auth.middleware.ts';
+import validate from '../../middlewares/validate.middleware.ts';
+import { submitMissionSchema, validateSubmissionSchema } from '../../validations/submission.validation.ts';
+
+const router = Router();
+
+router.use(authenticate);
+
+router.get('/upload-url', submissionController.getUploadUrl);
+router.post('/', validate(submitMissionSchema), submissionController.submitMission);
+router.put('/:submissionId/validate', validate(validateSubmissionSchema), submissionController.validateSubmission);
+
+export default router;
