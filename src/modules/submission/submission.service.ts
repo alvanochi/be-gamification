@@ -20,6 +20,18 @@ const s3Client = new S3Client({
   },
 });
 
+function getDistanceFromLatLonInM(lat1: number, lon1: number, lat2: number, lon2: number) {
+  const R = 6371e3; // Radius of the earth in m
+  const dLat = (lat2-lat1) * (Math.PI/180);
+  const dLon = (lon2-lon1) * (Math.PI/180); 
+  const a = 
+    Math.sin(dLat/2) * Math.sin(dLat/2) +
+    Math.cos(lat1 * (Math.PI/180)) * Math.cos(lat2 * (Math.PI/180)) * 
+    Math.sin(dLon/2) * Math.sin(dLon/2); 
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a)); 
+  return R * c; // Distance in m
+}
+
 export const generatePresignedUrl = async (fileName: string, mimeType: string) => {
   const fileKey = `uploads/${nanoid(8)}-${fileName}`;
   const command = new PutObjectCommand({
@@ -51,6 +63,19 @@ export const submitMission = async (groupId: string, userId: string, data: Submi
   const hasValidSubmission = existing.some(s => s.status === 'PENDING' || s.status === 'APPROVED');
   if (hasValidSubmission) {
     throw ApiError.badRequest('Mission already submitted or pending validation');
+  }
+
+  if (mission[0].type === 'SOAL_LOKASI' && mission[0].geoLat && mission[0].geoLng && mission[0].geoRadius) {
+    if (!data.geoLat || !data.geoLng) {
+      throw ApiError.badRequest('Misi ini memerlukan koordinat lokasi (GPS)');
+    }
+    const dist = getDistanceFromLatLonInM(
+      parseFloat(data.geoLat), parseFloat(data.geoLng),
+      parseFloat(mission[0].geoLat), parseFloat(mission[0].geoLng)
+    );
+    if (dist > mission[0].geoRadius) {
+      throw ApiError.badRequest(`Lokasi Anda terlalu jauh dari target (${Math.round(dist)}m). Radius maksimal: ${mission[0].geoRadius}m`);
+    }
   }
 
   const submissionId = nanoid(16);

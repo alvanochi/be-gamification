@@ -19,4 +19,5 @@ export const users = pgTable('users', {
   tiktokAccount: varchar('tiktok_account', { length: 255 }),
   createdAt: timestamp('created_at', { withTimezone: false }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: false }).defaultNow().notNull(),
+  checkInAt: timestamp('checkin_at', { withTimezone: false }),
 });

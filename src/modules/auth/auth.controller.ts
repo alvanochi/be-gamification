@@ -1,7 +1,7 @@
 import type { NextFunction, Request, Response } from 'express';
 import catchAsync from '../../utils/catchAsync.ts';
 import response from '../../utils/response.ts';
-import { verifyUserCredential } from '../user/user.service.ts';
+import { verifyUserCredential, checkInUser } from '../user/user.service.ts';
 import ApiError from '../../utils/ApiError.ts';
 import { generateAccessTokenHelper, generateRefreshTokenHelper, verifyRefreshTokenHelper } from '../../utils/token.ts';
 import { addRefreshToken, deleteRefreshToken, verifyAndRefreshToken } from './auth.service.ts';
@@ -19,6 +19,7 @@ export const loginHandler = catchAsync(async (req: Request, res: Response, next:
   const refreshToken = generateRefreshTokenHelper({ id: userId });
 
   await addRefreshToken({ userId, refreshToken });
+  await checkInUser(userId);
 
   return response(res, 201, 'Authentication berhasil ditambahkan', {
     accessToken,

@@ -122,3 +122,11 @@ export const updateProfile = async (userId: string, data: UpdateProfileInput) =>
 
     return updated || null;
 };
+
+export const checkInUser = async (userId: string) => {
+    const [user] = await db.select({ checkInAt: users.checkInAt }).from(users).where(eq(users.id, userId)).limit(1);
+    
+    if (user && !user.checkInAt) {
+        await db.update(users).set({ checkInAt: new Date(), updatedAt: new Date() }).where(eq(users.id, userId));
+    }
+};

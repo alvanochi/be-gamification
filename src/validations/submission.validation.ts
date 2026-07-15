@@ -6,6 +6,8 @@ export const submitMissionSchema = z.object({
     mediaUrl: z.string().url().optional(),
     answerText: z.string().optional(),
     selectedOptionId: z.string().optional(),
+    geoLat: z.string().optional(),
+    geoLng: z.string().optional(),
   }).refine((data) => {
     return data.mediaUrl || data.answerText || data.selectedOptionId;
   }, {
