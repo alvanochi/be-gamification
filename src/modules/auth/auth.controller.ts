@@ -7,9 +7,9 @@ import { generateAccessTokenHelper, generateRefreshTokenHelper, verifyRefreshTok
 import { addRefreshToken, deleteRefreshToken, verifyAndRefreshToken } from './auth.service.ts';
 
 export const loginHandler = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
-  const { email, password } = req.body;
+  const { email, phoneNumber } = req.body;
 
-  const userId = await verifyUserCredential({ email, password });
+  const userId = await verifyUserCredential({ email, phoneNumber });
 
   if (!userId) {
     return next(ApiError.unauthorized('Kredensial yang Anda berikan salah'));

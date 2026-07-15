@@ -2,17 +2,22 @@ import type { Request, Response, NextFunction } from 'express';
 import catchAsync from '../../utils/catchAsync.ts';
 import response from '../../utils/response.ts';
 import ApiError from '../../utils/ApiError.ts';
-import { createUser, getUserById, getProfile, updateProfile, checkEmailExists } from './user.service.ts';
+import { createUser, getUserById, getProfile, updateProfile, checkEmailExists, checkPhoneExists } from './user.service.ts';
 
 export const createUserHandler = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
-  const { email, password, fullname } = req.body;
+  const { email, phoneNumber, fullname, businessName, youtubeAccount, instagramAccount, tiktokAccount } = req.body;
 
   const isEmailExist = await checkEmailExists(email);
   if (isEmailExist) {
     return next(ApiError.badRequest('Email sudah terdaftar'));
   }
 
-  const result = await createUser({ email, password, fullname });
+  const isPhoneExist = await checkPhoneExists(phoneNumber);
+  if (isPhoneExist) {
+    return next(ApiError.badRequest('Nomor telepon sudah terdaftar'));
+  }
+
+  const result = await createUser({ email, phoneNumber, fullname, businessName, youtubeAccount, instagramAccount, tiktokAccount });
 
   if (!result) {
     return next(ApiError.badRequest('Gagal menambahkan user'));

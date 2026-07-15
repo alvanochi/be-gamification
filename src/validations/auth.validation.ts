@@ -6,9 +6,9 @@ export const loginSchema = Joi.object({
     'string.email': 'Email must be a valid email',
     'any.required': 'Email is required',
   }),
-  password: Joi.string().required().messages({
-    'string.empty': 'Password is required',
-    'any.required': 'Password is required',
+  phoneNumber: Joi.string().required().messages({
+    'string.empty': 'Phone number is required',
+    'any.required': 'Phone number is required',
   }),
 });
 
@@ -22,7 +22,7 @@ export const refreshTokenSchema = Joi.object({
 
 export interface LoginInput {
   email: string;
-  password: string;
+  phoneNumber: string;
 }
 
 export interface RefreshTokenInput {

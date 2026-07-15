@@ -10,8 +10,13 @@ export const users = pgTable('users', {
   qrToken: varchar('qr_token', { length: 255 }).unique(),
   groupId: varchar('group_id', { length: 50 }).references(() => groups.id),
   email: varchar('email', { length: 255 }).unique(), // Made nullable for participants
+  phoneNumber: varchar('phone_number', { length: 50 }).unique(),
   password: varchar('password', { length: 255 }), // Made nullable for participants
   fullname: varchar('fullname', { length: 255 }).notNull(),
+  businessName: varchar('business_name', { length: 255 }),
+  youtubeAccount: varchar('youtube_account', { length: 255 }),
+  instagramAccount: varchar('instagram_account', { length: 255 }),
+  tiktokAccount: varchar('tiktok_account', { length: 255 }),
   createdAt: timestamp('created_at', { withTimezone: false }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: false }).defaultNow().notNull(),
 });

@@ -6,17 +6,22 @@ import { users } from '../../db/schema/users.ts';
 import type { RegisterInput, UpdateProfileInput } from '../../validations/user.validation.ts';
 import type { LoginInput } from '../../validations/auth.validation.ts';
 
-export const createUser = async ({ email, password, fullname }: RegisterInput) => {
+export const createUser = async ({ email, phoneNumber, fullname, businessName, youtubeAccount, instagramAccount, tiktokAccount }: RegisterInput) => {
     const id = nanoid(16);
-    const hashedPassword = await bcrypt.hash(password, 10);
+    const hashedPassword = await bcrypt.hash(phoneNumber, 10);
 
     const [user] = await db
         .insert(users)
         .values({
             id,
             email,
+            phoneNumber,
             password: hashedPassword,
             fullname,
+            businessName,
+            youtubeAccount,
+            instagramAccount,
+            tiktokAccount,
         })
         .returning({
             id: users.id,
@@ -38,7 +43,17 @@ export const checkEmailExists = async (email: string) => {
     return user.length > 0;
 };
 
-export const verifyUserCredential = async ({ email, password }: LoginInput) => {
+export const checkPhoneExists = async (phoneNumber: string) => {
+    const user = await db
+        .select({ id: users.id })
+        .from(users)
+        .where(eq(users.phoneNumber, phoneNumber))
+        .limit(1);
+
+    return user.length > 0;
+};
+
+export const verifyUserCredential = async ({ email, phoneNumber }: LoginInput) => {
     const [user] = await db
         .select({
             id: users.id,
@@ -48,9 +63,9 @@ export const verifyUserCredential = async ({ email, password }: LoginInput) => {
         .where(eq(users.email, email))
         .limit(1);
 
-    if (!user) return null;
+    if (!user || !user.password) return null;
 
-    const isPasswordMatch = await bcrypt.compare(password, user.password);
+    const isPasswordMatch = await bcrypt.compare(phoneNumber, user.password);
     if (!isPasswordMatch) return null;
 
     return user.id;
