@@ -1,7 +1,7 @@
 import { Request, Response } from 'express';
 import * as missionService from './mission.service.ts';
 import catchAsync from '../../utils/catchAsync.ts';
-import { sendResponse } from '../../utils/response.ts';
+import response from '../../utils/response.ts';
 import type { CreateMissionInput } from '../../validations/mission.validation.ts';
 import ApiError from '../../utils/ApiError.ts';
 import { db } from '../../db/index.ts';
@@ -18,7 +18,7 @@ export const createMission = catchAsync(async (req: Request, res: Response) => {
 
   const data = req.body as CreateMissionInput;
   const result = await missionService.createMission(data);
-  sendResponse(res, 201, 'Mission created successfully', result);
+  response(res, 201, 'Mission created successfully', result);
 });
 
 export const getMissions = catchAsync(async (req: Request, res: Response) => {
@@ -32,7 +32,7 @@ export const getMissions = catchAsync(async (req: Request, res: Response) => {
   if (user[0].role !== 'PARTICIPANT') {
     // Admin can see all
     const allMissions = await missionService.getAvailableMissions('admin_override'); // Or a direct call to get all
-    return sendResponse(res, 200, 'Missions fetched', allMissions);
+    return response(res, 200, 'Missions fetched', allMissions);
   }
 
   if (!user[0].groupId) {
@@ -40,5 +40,26 @@ export const getMissions = catchAsync(async (req: Request, res: Response) => {
   }
 
   const result = await missionService.getAvailableMissions(user[0].groupId);
-  sendResponse(res, 200, 'Missions fetched successfully', result);
+  response(res, 200, 'Missions fetched successfully', result);
+});
+
+export const createAssignment = catchAsync(async (req: Request, res: Response) => {
+  const { missionId } = req.params;
+  const { assigneeUserId } = req.body;
+  const userId = req.user?.id as string;
+  
+  const user = await db.select().from(users).where(eq(users.id, userId)).limit(1);
+  if (!user.length || !user[0].groupId) throw ApiError.badRequest('User must be in a group');
+
+  const result = await missionService.assignMission(missionId, user[0].groupId, assigneeUserId);
+  response(res, 201, 'Assignment created', result);
+});
+
+export const getMyAssignments = catchAsync(async (req: Request, res: Response) => {
+  const userId = req.user?.id as string;
+  const user = await db.select().from(users).where(eq(users.id, userId)).limit(1);
+  if (!user.length || !user[0].groupId) throw ApiError.badRequest('User must be in a group');
+
+  const assignmentsData = await missionService.getAssignmentsByGroup(user[0].groupId);
+  response(res, 200, 'Assignments fetched', assignmentsData);
 });

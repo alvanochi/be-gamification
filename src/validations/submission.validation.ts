@@ -8,7 +8,7 @@ export const submitMissionSchema = z.object({
     selectedOptionId: z.string().optional(),
     geoLat: z.string().optional(),
     geoLng: z.string().optional(),
-  }).refine((data) => {
+  }).refine((data: any) => {
     return data.mediaUrl || data.answerText || data.selectedOptionId;
   }, {
     message: "Must provide at least one form of proof (mediaUrl, answerText, or selectedOptionId)",

@@ -4,13 +4,13 @@ import { eq, and } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import { db } from '../../db/index.ts';
 import { submissions } from '../../db/schema/submissions.ts';
+import { barterSteps } from '../../db/schema/barter_steps.ts';
 import { missions } from '../../db/schema/missions.ts';
 import { groups } from '../../db/schema/groups.ts';
 import ApiError from '../../utils/ApiError.ts';
 import type { SubmitMissionInput } from '../../validations/submission.validation.ts';
 import env from '../../config/env.ts';
 
-// Configured for Cloudflare R2
 const s3Client = new S3Client({
   region: 'auto',
   endpoint: `https://${env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
@@ -22,13 +22,13 @@ const s3Client = new S3Client({
 
 function getDistanceFromLatLonInM(lat1: number, lon1: number, lat2: number, lon2: number) {
   const R = 6371e3; // Radius of the earth in m
-  const dLat = (lat2-lat1) * (Math.PI/180);
-  const dLon = (lon2-lon1) * (Math.PI/180); 
-  const a = 
-    Math.sin(dLat/2) * Math.sin(dLat/2) +
-    Math.cos(lat1 * (Math.PI/180)) * Math.cos(lat2 * (Math.PI/180)) * 
-    Math.sin(dLon/2) * Math.sin(dLon/2); 
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a)); 
+  const dLat = (lat2 - lat1) * (Math.PI / 180);
+  const dLon = (lon2 - lon1) * (Math.PI / 180);
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(lat1 * (Math.PI / 180)) * Math.cos(lat2 * (Math.PI / 180)) *
+    Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
   return R * c; // Distance in m
 }
 
@@ -44,7 +44,7 @@ export const generatePresignedUrl = async (fileName: string, mimeType: string) =
   return {
     uploadUrl: presignedUrl,
     fileKey,
-    publicUrl: `https://${env.R2_PUBLIC_DOMAIN}/${fileKey}`, // Adjust based on R2 config
+    publicUrl: `https://${env.R2_PUBLIC_DOMAIN}/${fileKey}`,
   };
 };
 
@@ -52,15 +52,14 @@ export const submitMission = async (groupId: string, userId: string, data: Submi
   const mission = await db.select().from(missions).where(eq(missions.id, data.missionId)).limit(1);
   if (!mission.length) throw ApiError.notFound('Mission not found');
 
-  // Check if already submitted and pending or approved
   const existing = await db.select()
     .from(submissions)
     .where(and(
       eq(submissions.missionId, data.missionId),
       eq(submissions.groupId, groupId)
     ));
-    
-  const hasValidSubmission = existing.some(s => s.status === 'PENDING' || s.status === 'APPROVED');
+
+  const hasValidSubmission = existing.some((s: any) => s.status === 'PENDING' || s.status === 'APPROVED');
   if (hasValidSubmission) {
     throw ApiError.badRequest('Mission already submitted or pending validation');
   }
@@ -98,8 +97,7 @@ export const validateSubmission = async (submissionId: string, status: 'APPROVED
   if (!submission.length) throw ApiError.notFound('Submission not found');
   if (submission[0].status !== 'PENDING') throw ApiError.badRequest('Submission already validated');
 
-  await db.transaction(async (tx) => {
-    // Update submission
+  await db.transaction(async (tx: any) => {
     await tx.update(submissions)
       .set({
         status,
@@ -109,7 +107,6 @@ export const validateSubmission = async (submissionId: string, status: 'APPROVED
       })
       .where(eq(submissions.id, submissionId));
 
-    // Add points if approved
     if (status === 'APPROVED') {
       const mission = await tx.select().from(missions).where(eq(missions.id, submission[0].missionId)).limit(1);
       const points = mission[0]?.pointWeight || 0;
@@ -124,4 +121,31 @@ export const validateSubmission = async (submissionId: string, status: 'APPROVED
       }
     }
   });
+};
+
+export const submitBarterStep = async (data: any) => {
+  const { assignmentId, stepNo, itemFrom, itemTo, partnerName, videoUrl } = data;
+  if (!assignmentId || !stepNo || !itemFrom || !itemTo || !videoUrl) {
+    throw ApiError.badRequest('Missing required fields for barter step');
+  }
+
+  const existingStep = await db.select().from(barterSteps).where(
+    and(eq(barterSteps.assignmentId, assignmentId), eq(barterSteps.stepNo, stepNo))
+  ).limit(1);
+
+  if (existingStep.length) throw ApiError.badRequest('Barter step already exists');
+
+  const stepId = nanoid(16);
+  await db.insert(barterSteps).values({
+    id: stepId,
+    assignmentId,
+    stepNo,
+    itemFrom,
+    itemTo,
+    partnerName,
+    videoUrl,
+    isValid: true,
+  });
+
+  return { id: stepId };
 };

@@ -11,4 +11,7 @@ router.use(authenticate);
 router.post('/', validate(createMissionSchema), missionController.createMission);
 router.get('/', missionController.getMissions);
 
+router.post('/:missionId/assignments', missionController.createAssignment);
+router.get('/my-assignments', missionController.getMyAssignments);
+
 export default router;

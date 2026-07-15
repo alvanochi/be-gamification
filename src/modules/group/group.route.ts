@@ -12,5 +12,7 @@ router.post('/auto-group', groupController.autoGroup);
 router.get('/:groupId', groupController.getGroup);
 router.put('/:groupId/name', validate(updateGroupNameSchema), groupController.updateName);
 router.post('/:groupId/vote-leader', validate(voteLeaderSchema), groupController.voteLeader);
+router.post('/:groupId/confirm/:targetUserId', groupController.confirmMember);
+router.get('/:groupId/confirmations', groupController.getConfirmations);
 
 export default router;

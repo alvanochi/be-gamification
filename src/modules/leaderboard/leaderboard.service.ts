@@ -1,16 +1,16 @@
-import { desc } from 'drizzle-orm';
+import { sql } from 'drizzle-orm';
 import { db } from '../../db/index.ts';
-import { groups } from '../../db/schema/groups.ts';
 
 export const getLeaderboard = async () => {
-  return await db.select({
-    id: groups.id,
-    name: groups.name,
-    score: groups.score,
-  })
-  .from(groups)
-  .orderBy(desc(groups.score))
-  .limit(50);
+  const result = await db.execute(sql`
+    SELECT g.id, g.name, COALESCE(SUM(s.point), 0)::int as score
+    FROM groups g
+    LEFT JOIN score_entries s ON s.group_id = g.id
+    GROUP BY g.id
+    ORDER BY score DESC
+    LIMIT 50
+  `);
+  return result.rows;
 };
 
 // Template for Phase 2: WebSocket Broadcaster

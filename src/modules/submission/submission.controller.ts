@@ -1,7 +1,7 @@
 import { Request, Response } from 'express';
 import * as submissionService from './submission.service.ts';
 import catchAsync from '../../utils/catchAsync.ts';
-import { sendResponse } from '../../utils/response.ts';
+import response from '../../utils/response.ts';
 import type { SubmitMissionInput, ValidateSubmissionInput } from '../../validations/submission.validation.ts';
 import ApiError from '../../utils/ApiError.ts';
 import { db } from '../../db/index.ts';
@@ -15,7 +15,7 @@ export const getUploadUrl = catchAsync(async (req: Request, res: Response) => {
   }
 
   const result = await submissionService.generatePresignedUrl(fileName as string, mimeType as string);
-  sendResponse(res, 200, 'Presigned URL generated', result);
+  response(res, 200, 'Presigned URL generated', result);
 });
 
 export const submitMission = catchAsync(async (req: Request, res: Response) => {
@@ -26,7 +26,7 @@ export const submitMission = catchAsync(async (req: Request, res: Response) => {
 
   const data = req.body as SubmitMissionInput;
   const result = await submissionService.submitMission(user[0].groupId, userId, data);
-  sendResponse(res, 201, 'Mission submitted successfully', result);
+  response(res, 201, 'Mission submitted successfully', result);
 });
 
 export const validateSubmission = catchAsync(async (req: Request, res: Response) => {
@@ -40,5 +40,10 @@ export const validateSubmission = catchAsync(async (req: Request, res: Response)
 
   const { status } = req.body as ValidateSubmissionInput;
   await submissionService.validateSubmission(submissionId, status, validatorId);
-  sendResponse(res, 200, `Submission ${status.toLowerCase()} successfully`, null);
+  response(res, 200, `Submission ${status.toLowerCase()} successfully`, null);
+});
+
+export const submitBarterStep = catchAsync(async (req: Request, res: Response) => {
+  const result = await submissionService.submitBarterStep(req.body);
+  response(res, 201, 'Barter step submitted', result);
 });

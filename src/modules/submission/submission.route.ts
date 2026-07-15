@@ -11,5 +11,6 @@ router.use(authenticate);
 router.get('/upload-url', submissionController.getUploadUrl);
 router.post('/', validate(submitMissionSchema), submissionController.submitMission);
 router.put('/:submissionId/validate', validate(validateSubmissionSchema), submissionController.validateSubmission);
+router.post('/barter-steps', submissionController.submitBarterStep);
 
 export default router;

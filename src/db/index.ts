@@ -6,7 +6,11 @@ import * as groupsSchema from './schema/groups.ts';
 import * as sponsorsSchema from './schema/sponsors.ts';
 import * as missionsSchema from './schema/missions.ts';
 import * as submissionsSchema from './schema/submissions.ts';
-
+import * as assignmentsSchema from './schema/assignments.ts';
+import * as barterStepsSchema from './schema/barter_steps.ts';
+import * as scoreEntriesSchema from './schema/score_entries.ts';
+import * as confirmationsSchema from './schema/member_confirmations.ts';
+import * as leaderVotesSchema from './schema/leader_votes.ts';
 export const schema = {
   ...usersSchema,
   ...authenticationsSchema,
@@ -14,6 +18,11 @@ export const schema = {
   ...sponsorsSchema,
   ...missionsSchema,
   ...submissionsSchema,
+  ...assignmentsSchema,
+  ...barterStepsSchema,
+  ...scoreEntriesSchema,
+  ...confirmationsSchema,
+  ...leaderVotesSchema,
 };
 
 export const db = drizzle(pool, { schema });
