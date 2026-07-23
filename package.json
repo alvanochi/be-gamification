@@ -31,7 +31,8 @@
     "multer": "^1.4.5-lts.2",
     "nanoid": "^5.1.7",
     "node-pg-migrate": "^8.0.4",
-    "pg": "^8.20.0"
+    "pg": "^8.20.0",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/bcrypt": "^5.0.2",

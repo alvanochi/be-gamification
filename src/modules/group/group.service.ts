@@ -12,11 +12,14 @@ export const autoGroupUser = async (userId: string) => {
   if (!user.length) throw ApiError.notFound('User not found');
   if (user[0].groupId) throw ApiError.badRequest('User already in a group');
 
-  // Find an existing group with less than 6 members
+  // Find an existing group with less than 6 members that hasn't already
+  // elected a leader (once a leader is set, the group is past the point
+  // where new members can still confirm/vote alongside everyone else).
   const availableGroups = await db.execute(sql`
     SELECT g.id, COUNT(u.id) as member_count
     FROM groups g
     LEFT JOIN users u ON u.group_id = g.id
+    WHERE g.leader_id IS NULL
     GROUP BY g.id
     HAVING COUNT(u.id) < 6
     LIMIT 1
@@ -44,16 +47,40 @@ export const autoGroupUser = async (userId: string) => {
   return { groupId: targetGroupId };
 };
 
-export const updateGroupName = async (groupId: string, newName: string) => {
-  const existing = await db.select().from(groups).where(eq(groups.name, newName)).limit(1);
+export const updateGroupName = async (groupId: string, newName: string, requesterId: string) => {
+  const group = await db.select().from(groups).where(eq(groups.id, groupId)).limit(1);
+  if (!group.length) throw ApiError.notFound('Group not found');
+  if (group[0].leaderId !== requesterId) {
+    throw ApiError.forbidden('Only the group leader can name the group');
+  }
+
+  // Case-insensitive per SRS ("cek keunikan nama secara real-time, case-insensitive")
+  const existing = await db.select().from(groups).where(
+    sql`LOWER(${groups.name}) = LOWER(${newName})`
+  ).limit(1);
   if (existing.length > 0 && existing[0].id !== groupId) {
     throw ApiError.badRequest('Group name already exists');
   }
 
-  await db.update(groups).set({ name: newName, updatedAt: new Date() }).where(eq(groups.id, groupId));
+  await db.update(groups)
+    .set({ name: newName, nameSetAt: new Date(), updatedAt: new Date() })
+    .where(eq(groups.id, groupId));
+};
+
+export const setGroupPhotoCompleted = async (groupId: string) => {
+  const group = await db.select().from(groups).where(eq(groups.id, groupId)).limit(1);
+  if (!group.length) throw ApiError.notFound('Group not found');
+
+  await db.update(groups)
+    .set({ photoCompletedAt: new Date(), updatedAt: new Date() })
+    .where(eq(groups.id, groupId));
 };
 
 export const confirmMember = async (groupId: string, confirmerId: string, confirmedId: string) => {
+  if (confirmerId === confirmedId) {
+    throw ApiError.badRequest('Cannot confirm yourself');
+  }
+
   // Check if they are in the same group
   const user1 = await db.select().from(users).where(eq(users.id, confirmerId)).limit(1);
   const user2 = await db.select().from(users).where(eq(users.id, confirmedId)).limit(1);
@@ -82,6 +109,10 @@ export const getConfirmations = async (groupId: string) => {
 };
 
 export const recordVote = async (groupId: string, voterId: string, nomineeId: string) => {
+  if (voterId === nomineeId) {
+    throw ApiError.badRequest('Cannot vote for yourself');
+  }
+
   const group = await db.select().from(groups).where(eq(groups.id, groupId)).limit(1);
   if (!group.length) throw ApiError.notFound('Group not found');
   if (group[0].leaderId) throw ApiError.badRequest('Group already has a leader');
@@ -92,9 +123,22 @@ export const recordVote = async (groupId: string, voterId: string, nomineeId: st
   if (!user.length || user[0].groupId !== groupId) throw ApiError.badRequest('Voter must be in this group');
   if (!nominee.length || nominee[0].groupId !== groupId) throw ApiError.badRequest('Nominee must be in this group');
 
-  // Get current round
+  const groupMembers = await db.select().from(users).where(eq(users.groupId, groupId));
+
+  // Get current round. A round only counts as "current/open" if it hasn't
+  // been fully voted yet — otherwise (e.g. after a tie) everyone would
+  // immediately fail the "already voted" check below and the group would
+  // be stuck forever on the tied round.
   const maxRoundRes = await db.execute(sql`SELECT MAX(round) as max_round FROM leader_votes WHERE group_id = ${groupId}`);
-  let currentRound = maxRoundRes.rows[0].max_round ? Number(maxRoundRes.rows[0].max_round) : 1;
+  const maxRound = maxRoundRes.rows[0].max_round ? Number(maxRoundRes.rows[0].max_round) : 0;
+
+  let currentRound = maxRound || 1;
+  if (maxRound > 0) {
+    const votesInMaxRound = await db.select().from(leaderVotes).where(
+      sql`${leaderVotes.groupId} = ${groupId} AND ${leaderVotes.round} = ${maxRound}`
+    );
+    currentRound = votesInMaxRound.length >= groupMembers.length ? maxRound + 1 : maxRound;
+  }
 
   // Check if voter already voted in current round
   const existingVote = await db.select().from(leaderVotes).where(
@@ -115,8 +159,6 @@ export const recordVote = async (groupId: string, voterId: string, nomineeId: st
     sql`${leaderVotes.groupId} = ${groupId} AND ${leaderVotes.round} = ${currentRound}`
   );
 
-  const groupMembers = await db.select().from(users).where(eq(users.groupId, groupId));
-  
   if (allVotes.length >= groupMembers.length && groupMembers.length > 0) {
     // Tally votes
     const voteCounts: Record<string, number> = {};

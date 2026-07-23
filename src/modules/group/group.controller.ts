@@ -19,8 +19,14 @@ export const getGroup = catchAsync(async (req: Request, res: Response) => {
 export const updateName = catchAsync(async (req: Request, res: Response) => {
   const { groupId } = req.params;
   const { name } = req.body as UpdateGroupNameInput;
-  await groupService.updateGroupName(groupId, name);
+  await groupService.updateGroupName(groupId, name, req.user?.id as string);
   response(res, 200, 'Group name updated successfully', null);
+});
+
+export const setPhotoCompleted = catchAsync(async (req: Request, res: Response) => {
+  const { groupId } = req.params;
+  await groupService.setGroupPhotoCompleted(groupId);
+  response(res, 200, 'Group photo step completed', null);
 });
 
 export const voteLeader = catchAsync(async (req: Request, res: Response) => {

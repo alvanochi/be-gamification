@@ -77,6 +77,9 @@ export const getUserById = async (id: string) => {
             id: users.id,
             email: users.email,
             fullname: users.fullname,
+            role: users.role,
+            groupId: users.groupId,
+            checkInAt: users.checkInAt,
             createdAt: users.createdAt,
             updatedAt: users.updatedAt,
         })
