@@ -1,7 +1,7 @@
-import { eq, and, sql } from 'drizzle-orm';
+import { eq, and } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import { db } from '../../db/index.ts';
-import { missions, missionOptions } from '../../db/schema/missions.ts';
+import { missions } from '../../db/schema/missions.ts';
 import { submissions } from '../../db/schema/submissions.ts';
 import { assignments } from '../../db/schema/assignments.ts';
 import ApiError from '../../utils/ApiError.ts';
@@ -10,29 +10,28 @@ import type { CreateMissionInput } from '../../validations/mission.validation.ts
 export const createMission = async (data: CreateMissionInput) => {
   const missionId = nanoid(16);
 
-  await db.transaction(async (tx: any) => {
-    await tx.insert(missions).values({
-      id: missionId,
-      title: data.title,
-      description: data.description,
-      type: data.type,
-      isMandatory: data.isMandatory,
-      pointWeight: data.pointWeight,
-      sponsorId: data.sponsorId,
-    });
-
-    if (data.type === 'MULTIPLE_CHOICE' && data.options && data.options.length > 0) {
-      const optionsToInsert = data.options.map((opt: any) => ({
-        id: nanoid(16),
-        missionId,
-        optionText: opt.optionText,
-        isCorrect: opt.isCorrect,
-      }));
-      await tx.insert(missionOptions).values(optionsToInsert);
-    }
+  await db.insert(missions).values({
+    id: missionId,
+    title: data.title,
+    description: data.description,
+    type: data.type,
+    isMandatory: data.isMandatory,
+    pointWeight: data.pointWeight,
+    sponsorId: data.sponsorId,
+    openAt: data.openAt ? new Date(data.openAt) : undefined,
+    prerequisiteId: data.prerequisiteId,
+    participantCount: data.participantCount,
+    geoLat: data.geoLat,
+    geoLng: data.geoLng,
+    geoRadius: data.geoRadius,
+    pointRules: data.pointRules,
   });
 
   return { id: missionId };
+};
+
+export const getAllMissions = async () => {
+  return await db.select().from(missions);
 };
 
 export const getAvailableMissions = async (groupId: string) => {

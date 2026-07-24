@@ -9,11 +9,10 @@ import { users } from '../../db/schema/users.ts';
 import { eq } from 'drizzle-orm';
 
 export const createMission = catchAsync(async (req: Request, res: Response) => {
-  // Ensure user is super_admin
   const userId = req.user?.id as string;
   const user = await db.select().from(users).where(eq(users.id, userId)).limit(1);
-  if (!user.length || user[0].role !== 'SUPER_ADMIN') {
-    throw ApiError.forbidden('Only SUPER_ADMIN can create missions');
+  if (!user.length || (user[0].role !== 'ADMIN' && user[0].role !== 'SUPER_ADMIN')) {
+    throw ApiError.forbidden('Only ADMIN or SUPER_ADMIN can create missions');
   }
 
   const data = req.body as CreateMissionInput;
@@ -28,10 +27,9 @@ export const getMissions = catchAsync(async (req: Request, res: Response) => {
   const user = await db.select().from(users).where(eq(users.id, userId)).limit(1);
   if (!user.length) throw ApiError.notFound('User not found');
   
-  // If admin/super_admin, maybe they can see all. But for participant, enforce gatekeeper.
+  // Admin/panitia/super_admin see every mission, unfiltered by group gatekeeper status.
   if (user[0].role !== 'PARTICIPANT') {
-    // Admin can see all
-    const allMissions = await missionService.getAvailableMissions('admin_override'); // Or a direct call to get all
+    const allMissions = await missionService.getAllMissions();
     return response(res, 200, 'Missions fetched', allMissions);
   }
 

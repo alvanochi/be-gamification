@@ -7,6 +7,8 @@ import { submissions } from '../../db/schema/submissions.ts';
 import { barterSteps } from '../../db/schema/barter_steps.ts';
 import { missions } from '../../db/schema/missions.ts';
 import { groups } from '../../db/schema/groups.ts';
+import { scoreEntries } from '../../db/schema/score_entries.ts';
+import { users } from '../../db/schema/users.ts';
 import ApiError from '../../utils/ApiError.ts';
 import type { SubmitMissionInput } from '../../validations/submission.validation.ts';
 import env from '../../config/env.ts';
@@ -46,6 +48,10 @@ export const generatePresignedUrl = async (fileName: string, mimeType: string) =
     fileKey,
     publicUrl: `https://${env.R2_PUBLIC_DOMAIN}/${fileKey}`,
   };
+};
+
+export const getSubmissionsByGroup = async (groupId: string) => {
+  return await db.select().from(submissions).where(eq(submissions.groupId, groupId));
 };
 
 export const submitMission = async (groupId: string, userId: string, data: SubmitMissionInput) => {
@@ -92,6 +98,31 @@ export const submitMission = async (groupId: string, userId: string, data: Submi
   return { id: submissionId };
 };
 
+export const getPendingSubmissions = async () => {
+  return await db
+    .select({
+      id: submissions.id,
+      status: submissions.status,
+      mediaUrl: submissions.mediaUrl,
+      answerText: submissions.answerText,
+      createdAt: submissions.createdAt,
+      missionId: missions.id,
+      missionTitle: missions.title,
+      missionType: missions.type,
+      pointWeight: missions.pointWeight,
+      groupId: groups.id,
+      groupName: groups.name,
+      submittedById: users.id,
+      submittedByName: users.fullname,
+    })
+    .from(submissions)
+    .innerJoin(missions, eq(submissions.missionId, missions.id))
+    .innerJoin(groups, eq(submissions.groupId, groups.id))
+    .innerJoin(users, eq(submissions.submittedBy, users.id))
+    .where(eq(submissions.status, 'PENDING'))
+    .orderBy(submissions.createdAt);
+};
+
 export const validateSubmission = async (submissionId: string, status: 'APPROVED' | 'REJECTED', validatorId: string) => {
   const submission = await db.select().from(submissions).where(eq(submissions.id, submissionId)).limit(1);
   if (!submission.length) throw ApiError.notFound('Submission not found');
@@ -112,6 +143,18 @@ export const validateSubmission = async (submissionId: string, status: 'APPROVED
       const points = mission[0]?.pointWeight || 0;
 
       if (points > 0) {
+        // The leaderboard and CSV export both sum score_entries, not groups.score —
+        // writing only to groups.score (as this used to do) meant approved mission
+        // points silently never appeared on the leaderboard.
+        await tx.insert(scoreEntries).values({
+          id: nanoid(16),
+          groupId: submission[0].groupId,
+          source: 'CHALLENGE',
+          referenceId: submissionId,
+          point: points,
+          createdBy: validatorId,
+        });
+
         const group = await tx.select().from(groups).where(eq(groups.id, submission[0].groupId)).limit(1);
         const currentScore = group[0]?.score || 0;
 
