@@ -64,6 +64,19 @@ export const validateSubmission = catchAsync(async (req: Request, res: Response)
   response(res, 200, `Submission ${status.toLowerCase()} successfully`, null);
 });
 
+export const getBarterSteps = catchAsync(async (req: Request, res: Response) => {
+  const userId = req.user?.id as string;
+  const user = await db.select().from(users).where(eq(users.id, userId)).limit(1);
+  if (!user.length) throw ApiError.notFound('User not found');
+  if (!user[0].groupId) throw ApiError.badRequest('User must join a group first');
+
+  const result = await submissionService.getBarterSteps(
+    user[0].groupId,
+    req.params.assignmentId as string,
+  );
+  response(res, 200, 'Barter steps fetched', result);
+});
+
 export const submitBarterStep = catchAsync(async (req: Request, res: Response) => {
   const userId = req.user?.id as string;
   const user = await db.select().from(users).where(eq(users.id, userId)).limit(1);

@@ -229,6 +229,19 @@ export const validateSubmission = async (
   });
 };
 
+export const getBarterSteps = async (groupId: string, assignmentId: string) => {
+  const assignment = await db.select().from(assignments)
+    .where(eq(assignments.id, assignmentId)).limit(1);
+  if (!assignment.length) throw ApiError.notFound('Assignment not found');
+  if (assignment[0].groupId !== groupId) {
+    throw ApiError.forbidden('Assignment ini bukan milik kelompok Anda');
+  }
+
+  return await db.select().from(barterSteps)
+    .where(eq(barterSteps.assignmentId, assignmentId))
+    .orderBy(barterSteps.stepNo);
+};
+
 export const submitBarterStep = async (groupId: string, data: any) => {
   const { assignmentId, stepNo, itemFrom, itemTo, partnerName, videoUrl } = data;
   if (!assignmentId || !stepNo || !itemFrom || !itemTo || !videoUrl) {

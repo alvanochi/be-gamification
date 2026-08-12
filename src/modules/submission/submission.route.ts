@@ -13,6 +13,7 @@ router.get('/my-group', submissionController.getMyGroupSubmissions);
 router.get('/pending', submissionController.getPendingSubmissions);
 router.post('/', validate(submitMissionSchema), submissionController.submitMission);
 router.put('/:submissionId/validate', validate(validateSubmissionSchema), submissionController.validateSubmission);
+router.get('/barter-steps/:assignmentId', submissionController.getBarterSteps);
 router.post('/barter-steps', submissionController.submitBarterStep);
 
 export default router;
