@@ -67,12 +67,12 @@ export const updateGroupName = async (groupId: string, newName: string, requeste
     .where(eq(groups.id, groupId));
 };
 
-export const setGroupPhotoCompleted = async (groupId: string) => {
+export const setGroupPhotoCompleted = async (groupId: string, photoUrl?: string) => {
   const group = await db.select().from(groups).where(eq(groups.id, groupId)).limit(1);
   if (!group.length) throw ApiError.notFound('Group not found');
 
   await db.update(groups)
-    .set({ photoCompletedAt: new Date(), updatedAt: new Date() })
+    .set({ photoCompletedAt: new Date(), photoUrl, updatedAt: new Date() })
     .where(eq(groups.id, groupId));
 };
 

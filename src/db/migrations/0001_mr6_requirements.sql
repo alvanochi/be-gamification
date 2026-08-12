@@ -53,7 +53,12 @@ WHERE s.mission_id = m.id
   AND s.status = 'APPROVED'
   AND s.awarded_point IS NULL;
 
--- 4. Tabel check-in / check-out per misi -----------------------------------
+-- 4. Foto kelompok kini benar-benar disimpan --------------------------------
+
+ALTER TABLE groups
+  ADD COLUMN IF NOT EXISTS photo_url varchar(1024);
+
+-- 5. Tabel check-in / check-out per misi -----------------------------------
 
 CREATE TABLE IF NOT EXISTS mission_checkins (
   id              varchar(50) PRIMARY KEY,
