@@ -12,6 +12,8 @@ router.post('/', validate({ body: registerSchema }), userController.createUserHa
 router.get('/me/profile', authenticate, userController.getProfileHandler);
 router.put('/me/profile', authenticate, validate({ body: updateProfileSchema }), userController.updateProfileHandler);
 
-router.get('/:id', validate({ params: idParamSchema }), userController.getUserByIdHandler);
+// Butuh sesi: endpoint ini mengembalikan email & keanggotaan kelompok, yang
+// sebelumnya bisa dibaca siapa saja tanpa token.
+router.get('/:id', authenticate, validate({ params: idParamSchema }), userController.getUserByIdHandler);
 
 export default router;

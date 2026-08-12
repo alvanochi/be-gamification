@@ -9,7 +9,11 @@ import { missions } from '../../db/schema/missions.ts';
 import { groups } from '../../db/schema/groups.ts';
 import { scoreEntries } from '../../db/schema/score_entries.ts';
 import { users } from '../../db/schema/users.ts';
+import { missionCheckins } from '../../db/schema/mission_checkins.ts';
+import { assignments } from '../../db/schema/assignments.ts';
 import ApiError from '../../utils/ApiError.ts';
+import { assertWithinEventWindow, assertWithinMissionSession } from '../../utils/eventTime.ts';
+import { getGatekeeperStatus } from '../mission/mission.service.ts';
 import type { SubmitMissionInput } from '../../validations/submission.validation.ts';
 import env from '../../config/env.ts';
 
@@ -57,6 +61,30 @@ export const getSubmissionsByGroup = async (groupId: string) => {
 export const submitMission = async (groupId: string, userId: string, data: SubmitMissionInput) => {
   const mission = await db.select().from(missions).where(eq(missions.id, data.missionId)).limit(1);
   if (!mission.length) throw ApiError.notFound('Mission not found');
+
+  // BR-04 time box harian dan sesi per-misi dari MR6.
+  assertWithinEventWindow();
+  assertWithinMissionSession(mission[0].sessionStart, mission[0].sessionEnd);
+
+  // BR-02 — gerbang wajib ditegakkan di sini, bukan hanya saat membaca daftar
+  // misi. Tanpa ini, memanggil endpoint langsung sudah cukup untuk melewatinya.
+  if (!mission[0].isMandatory) {
+    const { passed } = await getGatekeeperStatus(groupId);
+    if (!passed) {
+      throw ApiError.badRequest('Selesaikan misi wajib terlebih dahulu sebelum mengerjakan misi lain');
+    }
+  }
+
+  // MR6: misi TERSTRUKTUR mewajibkan lapor ke petugas pos lewat check-in online.
+  if (mission[0].requiresCheckIn) {
+    const checkIn = await db.select().from(missionCheckins).where(and(
+      eq(missionCheckins.missionId, data.missionId),
+      eq(missionCheckins.groupId, groupId),
+    )).limit(1);
+    if (!checkIn.length) {
+      throw ApiError.badRequest('Lakukan check-in di lokasi misi terlebih dahulu');
+    }
+  }
 
   const existing = await db.select()
     .from(submissions)
@@ -110,6 +138,13 @@ export const getPendingSubmissions = async () => {
       missionTitle: missions.title,
       missionType: missions.type,
       pointWeight: missions.pointWeight,
+      // Dikirim agar antrean validasi tahu kapan harus menampilkan input nilai
+      // (misi berentang) dan bukti seperti apa yang seharusnya dikirim peserta.
+      pointMin: missions.pointMin,
+      pointMax: missions.pointMax,
+      proofType: missions.proofType,
+      missionCategory: missions.category,
+      locationName: missions.locationName,
       groupId: groups.id,
       groupName: groups.name,
       submittedById: users.id,
@@ -123,15 +158,50 @@ export const getPendingSubmissions = async () => {
     .orderBy(submissions.createdAt);
 };
 
-export const validateSubmission = async (submissionId: string, status: 'APPROVED' | 'REJECTED', validatorId: string) => {
+export const validateSubmission = async (
+  submissionId: string,
+  status: 'APPROVED' | 'REJECTED',
+  validatorId: string,
+  awardedPoint?: number,
+  rejectReason?: string,
+) => {
   const submission = await db.select().from(submissions).where(eq(submissions.id, submissionId)).limit(1);
   if (!submission.length) throw ApiError.notFound('Submission not found');
   if (submission[0].status !== 'PENDING') throw ApiError.badRequest('Submission already validated');
+
+  // Penilaian rentang MR6 (mis. "50 - 100 POIN"): jika misi punya rentang,
+  // panitia wajib menentukan nilainya sendiri di dalam rentang tersebut.
+  // Tanpa rentang, nilai tetap diambil dari pointWeight seperti sebelumnya.
+  let pointsToAward = 0;
+  if (status === 'APPROVED') {
+    const missionRows = await db.select().from(missions)
+      .where(eq(missions.id, submission[0].missionId)).limit(1);
+    const mission = missionRows[0];
+    const hasRange = mission?.pointMin != null && mission?.pointMax != null;
+
+    if (hasRange) {
+      if (awardedPoint === undefined) {
+        throw ApiError.badRequest(
+          `Misi ini dinilai dalam rentang ${mission.pointMin} - ${mission.pointMax} poin. Mohon isi nilainya.`,
+        );
+      }
+      if (awardedPoint < mission.pointMin! || awardedPoint > mission.pointMax!) {
+        throw ApiError.badRequest(
+          `Nilai harus di antara ${mission.pointMin} dan ${mission.pointMax} poin.`,
+        );
+      }
+      pointsToAward = awardedPoint;
+    } else {
+      pointsToAward = awardedPoint ?? mission?.pointWeight ?? 0;
+    }
+  }
 
   await db.transaction(async (tx: any) => {
     await tx.update(submissions)
       .set({
         status,
+        awardedPoint: status === 'APPROVED' ? pointsToAward : null,
+        rejectReason: status === 'REJECTED' ? (rejectReason ?? null) : null,
         validatedBy: validatorId,
         validatedAt: new Date(),
         updatedAt: new Date(),
@@ -139,8 +209,7 @@ export const validateSubmission = async (submissionId: string, status: 'APPROVED
       .where(eq(submissions.id, submissionId));
 
     if (status === 'APPROVED') {
-      const mission = await tx.select().from(missions).where(eq(missions.id, submission[0].missionId)).limit(1);
-      const points = mission[0]?.pointWeight || 0;
+      const points = pointsToAward;
 
       if (points > 0) {
         // The leaderboard and CSV export both sum score_entries, not groups.score —
@@ -166,10 +235,19 @@ export const validateSubmission = async (submissionId: string, status: 'APPROVED
   });
 };
 
-export const submitBarterStep = async (data: any) => {
+export const submitBarterStep = async (groupId: string, data: any) => {
   const { assignmentId, stepNo, itemFrom, itemTo, partnerName, videoUrl } = data;
   if (!assignmentId || !stepNo || !itemFrom || !itemTo || !videoUrl) {
     throw ApiError.badRequest('Missing required fields for barter step');
+  }
+
+  // Tanpa cek ini, peserta mana pun bisa menyisipkan langkah barter ke rantai
+  // milik kelompok lain — cukup dengan menebak/melihat assignmentId-nya.
+  const assignment = await db.select().from(assignments)
+    .where(eq(assignments.id, assignmentId)).limit(1);
+  if (!assignment.length) throw ApiError.notFound('Assignment not found');
+  if (assignment[0].groupId !== groupId) {
+    throw ApiError.forbidden('Assignment ini bukan milik kelompok Anda');
   }
 
   const existingStep = await db.select().from(barterSteps).where(

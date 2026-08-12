@@ -159,13 +159,20 @@ export const recordVote = async (groupId: string, voterId: string, nomineeId: st
     sql`${leaderVotes.groupId} = ${groupId} AND ${leaderVotes.round} = ${currentRound}`
   );
 
-  if (allVotes.length >= groupMembers.length && groupMembers.length > 0) {
+  // Ambang mayoritas, bukan 100% kehadiran. Sebelumnya syaratnya adalah
+  // "semua anggota sudah memilih", sehingga satu peserta yang tidak hadir atau
+  // kehabisan baterai mengunci kelompoknya seharian tanpa jalan keluar.
+  // Kelompok ≤2 orang cukup 2 suara; selebihnya mayoritas sederhana.
+  const quorum = Math.max(2, Math.floor(groupMembers.length / 2) + 1);
+  const everyoneVoted = allVotes.length >= groupMembers.length;
+
+  if (groupMembers.length > 0 && allVotes.length >= Math.min(quorum, groupMembers.length)) {
     // Tally votes
     const voteCounts: Record<string, number> = {};
     for (const v of allVotes) {
       voteCounts[v.candidateId] = (voteCounts[v.candidateId] || 0) + 1;
     }
-    
+
     let maxVotes = 0;
     let winningCandidate = null;
     let tie = false;
@@ -180,16 +187,44 @@ export const recordVote = async (groupId: string, voterId: string, nomineeId: st
       }
     }
 
-    if (!tie && maxVotes > 0) {
+    // Kandidat teratas sudah tidak mungkin tersusul oleh sisa suara yang belum
+    // masuk — aman menutup pemilihan lebih awal tanpa menunggu anggota terakhir.
+    const remainingVotes = groupMembers.length - allVotes.length;
+    const runnerUp = Object.values(voteCounts).filter(c => c !== maxVotes).sort((a, b) => b - a)[0] ?? 0;
+    const isDecided = maxVotes > runnerUp + remainingVotes;
+
+    if (!tie && maxVotes > 0 && (everyoneVoted || isDecided)) {
       await db.update(groups).set({ leaderId: winningCandidate, updatedAt: new Date() }).where(eq(groups.id, groupId));
       return { status: 'LEADER_ELECTED', leaderId: winningCandidate };
-    } else {
-      // It's a tie, increment round (by returning needs_revote to client)
+    }
+
+    if (everyoneVoted) {
+      // Semua sudah memilih tapi hasilnya seri — perlu putaran ulang.
       return { status: 'NEEDS_REVOTE', newRound: currentRound + 1 };
     }
   }
 
   return { status: 'VOTE_RECORDED' };
+};
+
+/**
+ * Jaring pengaman lapangan: panitia menunjuk ketua secara manual ketika
+ * pemilihan tidak kunjung selesai (anggota tidak hadir, HP mati, dsb).
+ */
+export const setLeaderManually = async (groupId: string, nomineeId: string) => {
+  const group = await db.select().from(groups).where(eq(groups.id, groupId)).limit(1);
+  if (!group.length) throw ApiError.notFound('Group not found');
+
+  const nominee = await db.select().from(users).where(eq(users.id, nomineeId)).limit(1);
+  if (!nominee.length || nominee[0].groupId !== groupId) {
+    throw ApiError.badRequest('Nominee must be in this group');
+  }
+
+  await db.update(groups)
+    .set({ leaderId: nomineeId, updatedAt: new Date() })
+    .where(eq(groups.id, groupId));
+
+  return { groupId, leaderId: nomineeId };
 };
 
 export const getGroupDetails = async (groupId: string) => {

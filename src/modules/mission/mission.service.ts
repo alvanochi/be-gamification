@@ -4,7 +4,9 @@ import { db } from '../../db/index.ts';
 import { missions } from '../../db/schema/missions.ts';
 import { submissions } from '../../db/schema/submissions.ts';
 import { assignments } from '../../db/schema/assignments.ts';
+import { missionCheckins } from '../../db/schema/mission_checkins.ts';
 import ApiError from '../../utils/ApiError.ts';
+import { assertWithinEventWindow, assertWithinMissionSession } from '../../utils/eventTime.ts';
 import type { CreateMissionInput } from '../../validations/mission.validation.ts';
 
 export const createMission = async (data: CreateMissionInput) => {
@@ -25,6 +27,17 @@ export const createMission = async (data: CreateMissionInput) => {
     geoLng: data.geoLng,
     geoRadius: data.geoRadius,
     pointRules: data.pointRules,
+    category: data.category,
+    clueType: data.clueType,
+    clue: data.clue,
+    locationName: data.locationName,
+    sessionStart: data.sessionStart,
+    sessionEnd: data.sessionEnd,
+    durationMinutes: data.durationMinutes,
+    proofType: data.proofType,
+    pointMin: data.pointMin,
+    pointMax: data.pointMax,
+    requiresCheckIn: data.requiresCheckIn,
   });
 
   return { id: missionId };
@@ -34,28 +47,37 @@ export const getAllMissions = async () => {
   return await db.select().from(missions);
 };
 
-export const getAvailableMissions = async (groupId: string) => {
+/**
+ * BR-02 — misi lanjutan terkunci sampai misi wajib pertama disetujui.
+ *
+ * Dipakai bersama oleh daftar misi *dan* endpoint submit. Sebelumnya aturan ini
+ * hanya diterapkan saat membaca daftar, sehingga peserta bisa melewati gerbang
+ * dengan memanggil POST /submissions langsung.
+ */
+export const getGatekeeperStatus = async (groupId: string) => {
   const mandatoryMissions = await db.select().from(missions).where(eq(missions.isMandatory, true));
 
-  let isGatekeeperPassed = true;
-
-  if (mandatoryMissions.length > 0) {
-    const mandatoryMissionId = mandatoryMissions[0].id;
-    const submission = await db.select()
-      .from(submissions)
-      .where(and(
-        eq(submissions.missionId, mandatoryMissionId),
-        eq(submissions.groupId, groupId),
-        eq(submissions.status, 'APPROVED')
-      ))
-      .limit(1);
-
-    if (submission.length === 0) {
-      isGatekeeperPassed = false;
-    }
+  if (mandatoryMissions.length === 0) {
+    return { passed: true, mandatoryMissions, gatekeeperMission: null };
   }
 
-  if (!isGatekeeperPassed) {
+  const gatekeeperMission = mandatoryMissions[0];
+  const submission = await db.select()
+    .from(submissions)
+    .where(and(
+      eq(submissions.missionId, gatekeeperMission.id),
+      eq(submissions.groupId, groupId),
+      eq(submissions.status, 'APPROVED')
+    ))
+    .limit(1);
+
+  return { passed: submission.length > 0, mandatoryMissions, gatekeeperMission };
+};
+
+export const getAvailableMissions = async (groupId: string) => {
+  const { passed, mandatoryMissions } = await getGatekeeperStatus(groupId);
+
+  if (!passed) {
     return mandatoryMissions;
   }
 
@@ -103,4 +125,65 @@ export const assignMission = async (missionId: string, groupId: string, assignee
 
 export const getAssignmentsByGroup = async (groupId: string) => {
   return await db.select().from(assignments).where(eq(assignments.groupId, groupId));
+};
+
+// --- Check-in / check-out per misi (MR6) ---
+
+export const getCheckIn = async (missionId: string, groupId: string) => {
+  const rows = await db.select().from(missionCheckins).where(
+    and(eq(missionCheckins.missionId, missionId), eq(missionCheckins.groupId, groupId))
+  ).limit(1);
+  return rows[0] ?? null;
+};
+
+export const checkInMission = async (
+  missionId: string,
+  groupId: string,
+  userId: string,
+  queueNumber?: string,
+) => {
+  const mission = await db.select().from(missions).where(eq(missions.id, missionId)).limit(1);
+  if (!mission.length) throw ApiError.notFound('Mission not found');
+
+  assertWithinEventWindow();
+  assertWithinMissionSession(mission[0].sessionStart, mission[0].sessionEnd);
+
+  const { passed } = await getGatekeeperStatus(groupId);
+  if (!passed && !mission[0].isMandatory) {
+    throw ApiError.badRequest('Selesaikan misi wajib terlebih dahulu sebelum membuka misi lain');
+  }
+
+  const existing = await getCheckIn(missionId, groupId);
+  if (existing) {
+    if (existing.checkedOutAt) throw ApiError.badRequest('Kelompok sudah check-out dari misi ini');
+    throw ApiError.badRequest('Kelompok sudah check-in di misi ini');
+  }
+
+  const id = nanoid(16);
+  await db.insert(missionCheckins).values({
+    id,
+    missionId,
+    groupId,
+    checkedInBy: userId,
+    queueNumber,
+  });
+
+  return { id, checkedInAt: new Date() };
+};
+
+export const checkOutMission = async (missionId: string, groupId: string, userId: string) => {
+  const existing = await getCheckIn(missionId, groupId);
+  if (!existing) throw ApiError.badRequest('Kelompok belum check-in di misi ini');
+  if (existing.checkedOutAt) throw ApiError.badRequest('Kelompok sudah check-out dari misi ini');
+
+  const checkedOutAt = new Date();
+  await db.update(missionCheckins)
+    .set({ checkedOutBy: userId, checkedOutAt })
+    .where(eq(missionCheckins.id, existing.id));
+
+  return { id: existing.id, checkedOutAt };
+};
+
+export const getCheckInsByGroup = async (groupId: string) => {
+  return await db.select().from(missionCheckins).where(eq(missionCheckins.groupId, groupId));
 };

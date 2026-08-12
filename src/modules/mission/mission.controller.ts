@@ -61,3 +61,41 @@ export const getMyAssignments = catchAsync(async (req: Request, res: Response) =
   const assignmentsData = await missionService.getAssignmentsByGroup(user[0].groupId);
   response(res, 200, 'Assignments fetched', assignmentsData);
 });
+
+/** Ambil groupId peserta, dipakai semua handler check-in/out. */
+const requireGroup = async (userId: string) => {
+  const user = await db.select().from(users).where(eq(users.id, userId)).limit(1);
+  if (!user.length) throw ApiError.notFound('User not found');
+  if (!user[0].groupId) throw ApiError.badRequest('User must join a group first');
+  return user[0].groupId;
+};
+
+export const checkInMission = catchAsync(async (req: Request, res: Response) => {
+  const userId = req.user?.id as string;
+  const groupId = await requireGroup(userId);
+  const { queueNumber } = req.body ?? {};
+
+  const result = await missionService.checkInMission(
+    req.params.missionId as string,
+    groupId,
+    userId,
+    queueNumber,
+  );
+  response(res, 201, 'Check-in berhasil', result);
+});
+
+export const checkOutMission = catchAsync(async (req: Request, res: Response) => {
+  const userId = req.user?.id as string;
+  const groupId = await requireGroup(userId);
+
+  const result = await missionService.checkOutMission(req.params.missionId as string, groupId, userId);
+  response(res, 200, 'Check-out berhasil', result);
+});
+
+export const getMyCheckIns = catchAsync(async (req: Request, res: Response) => {
+  const userId = req.user?.id as string;
+  const groupId = await requireGroup(userId);
+
+  const result = await missionService.getCheckInsByGroup(groupId);
+  response(res, 200, 'Check-ins fetched', result);
+});

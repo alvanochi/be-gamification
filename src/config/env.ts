@@ -22,6 +22,14 @@ const envSchema = Joi.object({
     R2_SECRET_ACCESS_KEY: Joi.string().optional(),
     R2_BUCKET_NAME: Joi.string().optional(),
     R2_PUBLIC_DOMAIN: Joi.string().optional(),
+
+    // BR-04 Time Box: jendela 12 jam harian tempat seluruh aktivitas pengerjaan
+    // diizinkan. Format "HH:MM" waktu lokal acara. Kosongkan salah satunya untuk
+    // menonaktifkan pembatasan (mis. saat uji coba di luar jam acara).
+    EVENT_WINDOW_START: Joi.string().pattern(/^\d{2}:\d{2}$/).optional(),
+    EVENT_WINDOW_END: Joi.string().pattern(/^\d{2}:\d{2}$/).optional(),
+    // Offset zona waktu acara terhadap UTC, dalam jam. Yogyakarta = WIB = 7.
+    EVENT_TIMEZONE_OFFSET: Joi.number().default(7),
 }).unknown(true);
 
 const { error, value } = envSchema.validate(process.env);
@@ -50,6 +58,9 @@ const env = value as {
     R2_SECRET_ACCESS_KEY?: string;
     R2_BUCKET_NAME?: string;
     R2_PUBLIC_DOMAIN?: string;
+    EVENT_WINDOW_START?: string;
+    EVENT_WINDOW_END?: string;
+    EVENT_TIMEZONE_OFFSET: number;
 };
 
 export default env;

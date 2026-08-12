@@ -11,6 +11,7 @@ import { sponsors } from '../../db/schema/sponsors.ts';
 import { groups } from '../../db/schema/groups.ts';
 import { eq, and, gt, sql } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
+import * as groupService from '../group/group.service.ts';
 
 // Middleware or helper to ensure admin
 const ensureAdmin = async (userId: string) => {
@@ -19,6 +20,17 @@ const ensureAdmin = async (userId: string) => {
         throw ApiError.forbidden('Only ADMIN or SUPER_ADMIN can perform this action');
     }
 };
+
+export const setGroupLeader = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    const userId = req.user?.id as string;
+    await ensureAdmin(userId);
+
+    const { nomineeId } = req.body ?? {};
+    if (!nomineeId) throw ApiError.badRequest('nomineeId is required');
+
+    const result = await groupService.setLeaderManually(req.params.groupId as string, nomineeId);
+    return response(res, 200, 'Ketua kelompok ditetapkan oleh panitia', result);
+});
 
 export const getReviewQueue = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const userId = req.user?.id as string;
