@@ -25,7 +25,8 @@ export const updateName = catchAsync(async (req: Request, res: Response) => {
 
 export const setPhotoCompleted = catchAsync(async (req: Request, res: Response) => {
   const groupId = req.params.groupId as string;
-  await groupService.setGroupPhotoCompleted(groupId);
+  const { photoUrl } = req.body ?? {};
+  await groupService.setGroupPhotoCompleted(groupId, photoUrl);
   response(res, 200, 'Group photo step completed', null);
 });
 

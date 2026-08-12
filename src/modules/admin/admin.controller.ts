@@ -8,9 +8,12 @@ import { assignments } from '../../db/schema/assignments.ts';
 import { barterSteps } from '../../db/schema/barter_steps.ts';
 import { scoreEntries } from '../../db/schema/score_entries.ts';
 import { sponsors } from '../../db/schema/sponsors.ts';
+import { missions } from '../../db/schema/missions.ts';
 import { groups } from '../../db/schema/groups.ts';
+import { recalculateGroupScore } from '../../utils/groupScore.ts';
 import { eq, and, gt, sql } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
+import * as groupService from '../group/group.service.ts';
 
 // Middleware or helper to ensure admin
 const ensureAdmin = async (userId: string) => {
@@ -19,6 +22,17 @@ const ensureAdmin = async (userId: string) => {
         throw ApiError.forbidden('Only ADMIN or SUPER_ADMIN can perform this action');
     }
 };
+
+export const setGroupLeader = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    const userId = req.user?.id as string;
+    await ensureAdmin(userId);
+
+    const { nomineeId } = req.body ?? {};
+    if (!nomineeId) throw ApiError.badRequest('nomineeId is required');
+
+    const result = await groupService.setLeaderManually(req.params.groupId as string, nomineeId);
+    return response(res, 200, 'Ketua kelompok ditetapkan oleh panitia', result);
+});
 
 export const getReviewQueue = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const userId = req.user?.id as string;
@@ -33,18 +47,26 @@ export const addManualScore = catchAsync(async (req: Request, res: Response, nex
     await ensureAdmin(userId);
 
     const { groupId, point, referenceId } = req.body;
-    if (!groupId || !point) {
+    if (!groupId || point === undefined || point === null) {
         throw ApiError.badRequest('groupId and point are required');
     }
+    if (!Number.isInteger(point)) {
+        throw ApiError.badRequest('point must be an integer');
+    }
 
-    const [entry] = await db.insert(scoreEntries).values({
-        id: nanoid(16),
-        groupId,
-        source: 'MANUAL',
-        referenceId,
-        point,
-        createdBy: userId,
-    }).returning();
+    const entry = await db.transaction(async (tx: any) => {
+        const [inserted] = await tx.insert(scoreEntries).values({
+            id: nanoid(16),
+            groupId,
+            source: 'MANUAL',
+            referenceId,
+            point,
+            createdBy: userId,
+        }).returning();
+
+        await recalculateGroupScore(tx, groupId);
+        return inserted;
+    });
 
     return response(res, 201, 'Manual score added', entry);
 });
@@ -94,6 +116,16 @@ export const deleteBanner = catchAsync(async (req: Request, res: Response, next:
     await ensureAdmin(userId);
 
     const id = req.params.id as string;
+
+    // Menghapus sponsor yang masih ditautkan ke misi melanggar foreign key dan
+    // dulu berbalas 500. Beri tahu misi mana yang menahannya.
+    const tagged = await db.select({ title: missions.title }).from(missions).where(eq(missions.sponsorId, id));
+    if (tagged.length) {
+        throw ApiError.conflict(
+            `Sponsor masih ditautkan ke ${tagged.length} misi (${tagged.map(m => m.title).join(', ')}). Lepas tautannya lebih dulu.`,
+        );
+    }
+
     await db.delete(sponsors).where(eq(sponsors.id, id));
     return response(res, 200, 'Banner deleted', null);
 });
@@ -132,12 +164,8 @@ export const verifyBarter = catchAsync(async (req: Request, res: Response, next:
             point,
             createdBy: userId,
         });
-        
-        // Also update group static score just in case, but we will move to dynamic soon
-        const group = await tx.select().from(groups).where(eq(groups.id, assignment[0].groupId)).limit(1);
-        if (group.length) {
-            await tx.update(groups).set({ score: group[0].score + point, updatedAt: new Date() }).where(eq(groups.id, group[0].id));
-        }
+
+        await recalculateGroupScore(tx, assignment[0].groupId);
     });
 
     return response(res, 200, 'Barter verified', null);

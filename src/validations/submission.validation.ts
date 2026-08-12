@@ -18,6 +18,9 @@ export const submitMissionSchema = z.object({
 export const validateSubmissionSchema = z.object({
   body: z.object({
     status: z.enum(['APPROVED', 'REJECTED']),
+    // Wajib diisi untuk misi berentang nilai (MR6), diabaikan saat REJECTED.
+    awardedPoint: z.number().int().min(0).optional(),
+    rejectReason: z.string().max(500).optional(),
   }),
 });
 

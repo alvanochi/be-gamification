@@ -1,4 +1,4 @@
-import { pgTable, varchar, text, timestamp, pgEnum } from 'drizzle-orm/pg-core';
+import { pgTable, varchar, text, integer, timestamp, pgEnum } from 'drizzle-orm/pg-core';
 import { missions, missionOptions } from './missions.ts';
 import { groups } from './groups.ts';
 import { users } from './users.ts';
@@ -14,6 +14,10 @@ export const submissions = pgTable('submissions', {
   mediaUrl: varchar('media_url', { length: 1024 }),
   answerText: text('answer_text'),
   selectedOptionId: varchar('selected_option_id', { length: 50 }).references(() => missionOptions.id),
+  // Nilai yang benar-benar diberikan panitia. Untuk misi dengan rentang MR6
+  // (mis. 50-100 poin) angkanya bisa berbeda dari missions.pointWeight.
+  awardedPoint: integer('awarded_point'),
+  rejectReason: text('reject_reason'),
   validatedBy: varchar('validated_by', { length: 50 }).references(() => users.id),
   validatedAt: timestamp('validated_at', { withTimezone: false }),
   createdAt: timestamp('created_at', { withTimezone: false }).defaultNow().notNull(),

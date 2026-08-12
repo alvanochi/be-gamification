@@ -1,7 +1,8 @@
 import { z } from 'zod';
 
-export const createMissionSchema = z.object({
-  body: z.object({
+// Bentuk dasar body misi, dipakai createMissionSchema (utuh + aturan silang)
+// dan updateMissionSchema (partial).
+const missionBody = z.object({
     title: z.string().min(3).max(255),
     description: z.string(),
     // Must match the real `mission_type` DB enum (missions.ts) — the
@@ -26,7 +27,56 @@ export const createMissionSchema = z.object({
     // hit #21" threshold example in the SRS) — kept as a config blob rather
     // than hard-coded, per the SRS's own principle.
     pointRules: z.record(z.string(), z.unknown()).optional(),
-  }),
+
+    // --- Kebutuhan MR6 ---
+    category: z.enum(['TERSTRUKTUR', 'MANDIRI']).default('MANDIRI'),
+    clueType: z.enum(['NONE', 'TEKS', 'MORSE', 'SANDI_ANGKA', 'GPS', 'FOTO', 'MAP']).default('NONE'),
+    clue: z.string().optional(),
+    locationName: z.string().max(255).optional(),
+    // "HH:MM" — jam lokal acara, bukan timestamp; lihat komentar di skema.
+    sessionStart: z.string().regex(/^\d{2}:\d{2}$/, 'Format sesi harus HH:MM').optional(),
+    sessionEnd: z.string().regex(/^\d{2}:\d{2}$/, 'Format sesi harus HH:MM').optional(),
+    durationMinutes: z.number().int().min(1).optional(),
+    proofType: z
+      .enum(['FOTO', 'VIDEO', 'FOTO_VIDEO', 'LINK_SOSMED', 'LAPORAN_PETUGAS', 'INPUT_HASIL'])
+      .default('FOTO'),
+    pointMin: z.number().int().min(0).optional(),
+    pointMax: z.number().int().min(0).optional(),
+    requiresCheckIn: z.boolean().default(false),
+});
+
+export const createMissionSchema = z.object({
+  body: missionBody
+    .refine(
+      data => (data.pointMin === undefined) === (data.pointMax === undefined),
+      { message: 'pointMin dan pointMax harus diisi bersamaan', path: ['pointMax'] },
+    )
+    .refine(
+      data => data.pointMin === undefined || data.pointMax === undefined || data.pointMin <= data.pointMax,
+      { message: 'pointMin tidak boleh lebih besar dari pointMax', path: ['pointMax'] },
+    )
+    .refine(
+      data => (data.sessionStart === undefined) === (data.sessionEnd === undefined),
+      { message: 'sessionStart dan sessionEnd harus diisi bersamaan', path: ['sessionEnd'] },
+    ),
 });
 
 export type CreateMissionInput = z.infer<typeof createMissionSchema>['body'];
+
+/**
+ * Update misi: seluruh field opsional (partial), tapi aturan silang yang sama
+ * tetap berlaku bila pasangannya ikut dikirim.
+ */
+export const updateMissionSchema = z.object({
+  body: missionBody.partial().refine(
+    (data: { pointMin?: number; pointMax?: number }) =>
+      data.pointMin === undefined || data.pointMax === undefined || data.pointMin <= data.pointMax,
+    { message: 'pointMin tidak boleh lebih besar dari pointMax', path: ['pointMax'] },
+  ),
+});
+
+export const missionCheckInSchema = z.object({
+  body: z.object({
+    queueNumber: z.string().max(20).optional(),
+  }),
+});

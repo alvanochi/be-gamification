@@ -11,6 +11,7 @@ import * as barterStepsSchema from './schema/barter_steps.ts';
 import * as scoreEntriesSchema from './schema/score_entries.ts';
 import * as confirmationsSchema from './schema/member_confirmations.ts';
 import * as leaderVotesSchema from './schema/leader_votes.ts';
+import * as missionCheckinsSchema from './schema/mission_checkins.ts';
 export const schema = {
   ...usersSchema,
   ...authenticationsSchema,
@@ -23,6 +24,7 @@ export const schema = {
   ...scoreEntriesSchema,
   ...confirmationsSchema,
   ...leaderVotesSchema,
+  ...missionCheckinsSchema,
 };
 
 export const db = drizzle(pool, { schema });

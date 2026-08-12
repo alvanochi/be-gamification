@@ -59,12 +59,30 @@ export const validateSubmission = catchAsync(async (req: Request, res: Response)
     throw ApiError.forbidden('Only ADMIN or SUPER_ADMIN can validate submissions');
   }
 
-  const { status } = req.body as ValidateSubmissionInput;
-  await submissionService.validateSubmission(submissionId, status, validatorId);
+  const { status, awardedPoint, rejectReason } = req.body as ValidateSubmissionInput;
+  await submissionService.validateSubmission(submissionId, status, validatorId, awardedPoint, rejectReason);
   response(res, 200, `Submission ${status.toLowerCase()} successfully`, null);
 });
 
+export const getBarterSteps = catchAsync(async (req: Request, res: Response) => {
+  const userId = req.user?.id as string;
+  const user = await db.select().from(users).where(eq(users.id, userId)).limit(1);
+  if (!user.length) throw ApiError.notFound('User not found');
+  if (!user[0].groupId) throw ApiError.badRequest('User must join a group first');
+
+  const result = await submissionService.getBarterSteps(
+    user[0].groupId,
+    req.params.assignmentId as string,
+  );
+  response(res, 200, 'Barter steps fetched', result);
+});
+
 export const submitBarterStep = catchAsync(async (req: Request, res: Response) => {
-  const result = await submissionService.submitBarterStep(req.body);
+  const userId = req.user?.id as string;
+  const user = await db.select().from(users).where(eq(users.id, userId)).limit(1);
+  if (!user.length) throw ApiError.notFound('User not found');
+  if (!user[0].groupId) throw ApiError.badRequest('User must join a group first');
+
+  const result = await submissionService.submitBarterStep(user[0].groupId, req.body);
   response(res, 201, 'Barter step submitted', result);
 });

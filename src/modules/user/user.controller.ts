@@ -2,7 +2,33 @@ import type { Request, Response, NextFunction } from 'express';
 import catchAsync from '../../utils/catchAsync.ts';
 import response from '../../utils/response.ts';
 import ApiError from '../../utils/ApiError.ts';
-import { createUser, getUserById, getProfile, updateProfile, checkEmailExists, checkPhoneExists } from './user.service.ts';
+import { createUser, getUserById, getProfile, updateProfile, checkEmailExists, checkPhoneExists, checkInByQrToken } from './user.service.ts';
+import { db } from '../../db/index.ts';
+import { users } from '../../db/schema/users.ts';
+import { eq } from 'drizzle-orm';
+
+export const checkInByQrHandler = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+  const scannerId = req.user?.id as string;
+  const [scanner] = await db.select({ role: users.role }).from(users).where(eq(users.id, scannerId)).limit(1);
+  if (!scanner || (scanner.role !== 'ADMIN' && scanner.role !== 'SUPER_ADMIN')) {
+    return next(ApiError.forbidden('Hanya panitia yang bisa memindai QR peserta'));
+  }
+
+  const { qrToken } = req.body ?? {};
+  if (!qrToken) return next(ApiError.badRequest('qrToken wajib diisi'));
+
+  const result = await checkInByQrToken(qrToken);
+  if (!result) return next(ApiError.notFound('QR tidak dikenali'));
+
+  return response(
+    res,
+    200,
+    result.alreadyCheckedIn
+      ? `${result.fullname} sudah check-in sebelumnya`
+      : `${result.fullname} berhasil check-in`,
+    result,
+  );
+});
 
 export const createUserHandler = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
   const { email, phoneNumber, fullname, businessName, youtubeAccount, instagramAccount, tiktokAccount } = req.body;
