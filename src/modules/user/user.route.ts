@@ -9,6 +9,9 @@ const router = Router();
 
 router.post('/', validate({ body: registerSchema }), userController.createUserHandler);
 
+// FR-01: panitia memindai QR peserta untuk check-in di lapangan.
+router.post('/check-in/qr', authenticate, userController.checkInByQrHandler);
+
 router.get('/me/profile', authenticate, userController.getProfileHandler);
 router.put('/me/profile', authenticate, validate({ body: updateProfileSchema }), userController.updateProfileHandler);
 

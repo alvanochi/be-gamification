@@ -47,6 +47,54 @@ export const getAllMissions = async () => {
   return await db.select().from(missions);
 };
 
+export const updateMission = async (missionId: string, data: Partial<CreateMissionInput>) => {
+  const existing = await db.select().from(missions).where(eq(missions.id, missionId)).limit(1);
+  if (!existing.length) throw ApiError.notFound('Mission not found');
+
+  if (data.prerequisiteId === missionId) {
+    throw ApiError.badRequest('Misi tidak boleh menjadi prasyarat bagi dirinya sendiri');
+  }
+
+  const { openAt, ...rest } = data;
+  await db.update(missions)
+    .set({
+      ...rest,
+      ...(openAt !== undefined ? { openAt: openAt ? new Date(openAt) : null } : {}),
+      updatedAt: new Date(),
+    })
+    .where(eq(missions.id, missionId));
+
+  return { id: missionId };
+};
+
+export const deleteMission = async (missionId: string) => {
+  const existing = await db.select().from(missions).where(eq(missions.id, missionId)).limit(1);
+  if (!existing.length) throw ApiError.notFound('Mission not found');
+
+  // Menghapus misi yang sudah dikerjakan akan menghilangkan jejak penilaian dan
+  // melanggar foreign key dari submissions/assignments — tolak dengan jelas.
+  const [usedBySubmission] = await db.select({ id: submissions.id })
+    .from(submissions).where(eq(submissions.missionId, missionId)).limit(1);
+  if (usedBySubmission) {
+    throw ApiError.conflict('Misi ini sudah punya submission dari peserta, tidak bisa dihapus');
+  }
+
+  const [usedByAssignment] = await db.select({ id: assignments.id })
+    .from(assignments).where(eq(assignments.missionId, missionId)).limit(1);
+  if (usedByAssignment) {
+    throw ApiError.conflict('Misi ini sudah di-assign ke kelompok, tidak bisa dihapus');
+  }
+
+  const [usedAsPrerequisite] = await db.select({ title: missions.title })
+    .from(missions).where(eq(missions.prerequisiteId, missionId)).limit(1);
+  if (usedAsPrerequisite) {
+    throw ApiError.conflict(`Misi ini masih menjadi prasyarat "${usedAsPrerequisite.title}"`);
+  }
+
+  await db.delete(missionCheckins).where(eq(missionCheckins.missionId, missionId));
+  await db.delete(missions).where(eq(missions.id, missionId));
+};
+
 /**
  * BR-02 — misi lanjutan terkunci sampai misi wajib pertama disetujui.
  *

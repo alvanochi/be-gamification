@@ -20,6 +20,27 @@ export const createMission = catchAsync(async (req: Request, res: Response) => {
   response(res, 201, 'Mission created successfully', result);
 });
 
+const ensureAdmin = async (userId: string) => {
+  const user = await db.select().from(users).where(eq(users.id, userId)).limit(1);
+  if (!user.length || (user[0].role !== 'ADMIN' && user[0].role !== 'SUPER_ADMIN')) {
+    throw ApiError.forbidden('Only ADMIN or SUPER_ADMIN can manage missions');
+  }
+};
+
+export const updateMission = catchAsync(async (req: Request, res: Response) => {
+  await ensureAdmin(req.user?.id as string);
+
+  const result = await missionService.updateMission(req.params.missionId as string, req.body);
+  response(res, 200, 'Mission updated successfully', result);
+});
+
+export const deleteMission = catchAsync(async (req: Request, res: Response) => {
+  await ensureAdmin(req.user?.id as string);
+
+  await missionService.deleteMission(req.params.missionId as string);
+  response(res, 200, 'Mission deleted successfully', null);
+});
+
 export const getMissions = catchAsync(async (req: Request, res: Response) => {
   const userId = req.user?.id as string;
   

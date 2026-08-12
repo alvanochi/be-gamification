@@ -1,7 +1,8 @@
 import { z } from 'zod';
 
-export const createMissionSchema = z.object({
-  body: z.object({
+// Bentuk dasar body misi, dipakai createMissionSchema (utuh + aturan silang)
+// dan updateMissionSchema (partial).
+const missionBody = z.object({
     title: z.string().min(3).max(255),
     description: z.string(),
     // Must match the real `mission_type` DB enum (missions.ts) — the
@@ -42,7 +43,10 @@ export const createMissionSchema = z.object({
     pointMin: z.number().int().min(0).optional(),
     pointMax: z.number().int().min(0).optional(),
     requiresCheckIn: z.boolean().default(false),
-  })
+});
+
+export const createMissionSchema = z.object({
+  body: missionBody
     .refine(
       data => (data.pointMin === undefined) === (data.pointMax === undefined),
       { message: 'pointMin dan pointMax harus diisi bersamaan', path: ['pointMax'] },
@@ -58,6 +62,18 @@ export const createMissionSchema = z.object({
 });
 
 export type CreateMissionInput = z.infer<typeof createMissionSchema>['body'];
+
+/**
+ * Update misi: seluruh field opsional (partial), tapi aturan silang yang sama
+ * tetap berlaku bila pasangannya ikut dikirim.
+ */
+export const updateMissionSchema = z.object({
+  body: missionBody.partial().refine(
+    (data: { pointMin?: number; pointMax?: number }) =>
+      data.pointMin === undefined || data.pointMax === undefined || data.pointMin <= data.pointMax,
+    { message: 'pointMin tidak boleh lebih besar dari pointMax', path: ['pointMax'] },
+  ),
+});
 
 export const missionCheckInSchema = z.object({
   body: z.object({

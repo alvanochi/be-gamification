@@ -13,6 +13,7 @@ import { missionCheckins } from '../../db/schema/mission_checkins.ts';
 import { assignments } from '../../db/schema/assignments.ts';
 import ApiError from '../../utils/ApiError.ts';
 import { assertWithinEventWindow, assertWithinMissionSession } from '../../utils/eventTime.ts';
+import { recalculateGroupScore } from '../../utils/groupScore.ts';
 import { getGatekeeperStatus } from '../mission/mission.service.ts';
 import type { SubmitMissionInput } from '../../validations/submission.validation.ts';
 import env from '../../config/env.ts';
@@ -212,9 +213,7 @@ export const validateSubmission = async (
       const points = pointsToAward;
 
       if (points > 0) {
-        // The leaderboard and CSV export both sum score_entries, not groups.score —
-        // writing only to groups.score (as this used to do) meant approved mission
-        // points silently never appeared on the leaderboard.
+        // score_entries adalah sumber kebenaran; groups.score diturunkan darinya.
         await tx.insert(scoreEntries).values({
           id: nanoid(16),
           groupId: submission[0].groupId,
@@ -224,12 +223,7 @@ export const validateSubmission = async (
           createdBy: validatorId,
         });
 
-        const group = await tx.select().from(groups).where(eq(groups.id, submission[0].groupId)).limit(1);
-        const currentScore = group[0]?.score || 0;
-
-        await tx.update(groups)
-          .set({ score: currentScore + points, updatedAt: new Date() })
-          .where(eq(groups.id, submission[0].groupId));
+        await recalculateGroupScore(tx, submission[0].groupId);
       }
     }
   });

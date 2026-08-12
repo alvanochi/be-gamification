@@ -22,15 +22,61 @@ export const createUser = async ({ email, phoneNumber, fullname, businessName, y
             youtubeAccount,
             instagramAccount,
             tiktokAccount,
+            // FR-01: token QR pribadi, dibuat sekali saat registrasi. Peserta
+            // menunjukkan QR-nya di lapangan dan panitia memindainya untuk
+            // check-in, tanpa antre pencatatan manual. Panjang 32 supaya tidak
+            // bisa ditebak/dienumerasi.
+            qrToken: nanoid(32),
         })
         .returning({
             id: users.id,
             email: users.email,
             fullname: users.fullname,
+            qrToken: users.qrToken,
             createdAt: users.createdAt,
         });
 
     return user;
+};
+
+/**
+ * Check-in peserta berdasarkan QR yang dipindai panitia.
+ * Idempoten: memindai ulang QR yang sama tidak menimpa waktu check-in pertama.
+ */
+export const checkInByQrToken = async (qrToken: string) => {
+    const [user] = await db
+        .select({
+            id: users.id,
+            fullname: users.fullname,
+            groupId: users.groupId,
+            checkInAt: users.checkInAt,
+        })
+        .from(users)
+        .where(eq(users.qrToken, qrToken))
+        .limit(1);
+
+    if (!user) return null;
+
+    if (user.checkInAt) {
+        return { ...user, alreadyCheckedIn: true };
+    }
+
+    const checkInAt = new Date();
+    await db.update(users).set({ checkInAt, updatedAt: new Date() }).where(eq(users.id, user.id));
+
+    return { ...user, checkInAt, alreadyCheckedIn: false };
+};
+
+/**
+ * Isi qrToken untuk akun lama yang dibuat sebelum FR-01 ada.
+ * Dipanggil saat profil dibaca agar tidak perlu migrasi data terpisah.
+ */
+export const ensureQrToken = async (userId: string, current: string | null) => {
+    if (current) return current;
+
+    const qrToken = nanoid(32);
+    await db.update(users).set({ qrToken, updatedAt: new Date() }).where(eq(users.id, userId));
+    return qrToken;
 };
 
 export const checkEmailExists = async (email: string) => {
@@ -90,8 +136,31 @@ export const getUserById = async (id: string) => {
     return user || null;
 };
 
+/**
+ * Profil diri sendiri — satu-satunya tempat qrToken boleh keluar.
+ * `getUserById` (dipakai untuk melihat peserta lain) sengaja tidak
+ * mengembalikannya, karena token itu yang dipakai panitia untuk check-in.
+ */
 export const getProfile = async (userId: string) => {
-    return getUserById(userId);
+    const [user] = await db
+        .select({
+            id: users.id,
+            email: users.email,
+            fullname: users.fullname,
+            role: users.role,
+            groupId: users.groupId,
+            qrToken: users.qrToken,
+            checkInAt: users.checkInAt,
+            createdAt: users.createdAt,
+            updatedAt: users.updatedAt,
+        })
+        .from(users)
+        .where(eq(users.id, userId))
+        .limit(1);
+
+    if (!user) return null;
+
+    return { ...user, qrToken: await ensureQrToken(user.id, user.qrToken) };
 };
 
 export const updateProfile = async (userId: string, data: UpdateProfileInput) => {
