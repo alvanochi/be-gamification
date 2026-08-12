@@ -51,7 +51,7 @@ export const getPendingSubmissions = catchAsync(async (req: Request, res: Respon
 });
 
 export const validateSubmission = catchAsync(async (req: Request, res: Response) => {
-  const { submissionId } = req.params;
+  const submissionId = req.params.submissionId as string;
   const validatorId = req.user?.id as string;
   
   const user = await db.select().from(users).where(eq(users.id, validatorId)).limit(1);

@@ -77,7 +77,7 @@ export const updateBanner = catchAsync(async (req: Request, res: Response, next:
     const userId = req.user?.id as string;
     await ensureAdmin(userId);
 
-    const { id } = req.params;
+    const id = req.params.id as string;
     const updateData = req.body;
 
     const [banner] = await db.update(sponsors).set({
@@ -93,7 +93,7 @@ export const deleteBanner = catchAsync(async (req: Request, res: Response, next:
     const userId = req.user?.id as string;
     await ensureAdmin(userId);
 
-    const { id } = req.params;
+    const id = req.params.id as string;
     await db.delete(sponsors).where(eq(sponsors.id, id));
     return response(res, 200, 'Banner deleted', null);
 });
@@ -102,7 +102,7 @@ export const verifyBarter = catchAsync(async (req: Request, res: Response, next:
     const userId = req.user?.id as string;
     await ensureAdmin(userId);
 
-    const { assignmentId } = req.params;
+    const assignmentId = req.params.assignmentId as string;
     const { validUntilStep, point } = req.body; // Step number until which it is valid
 
     if (validUntilStep === undefined || point === undefined) {
