@@ -1,5 +1,7 @@
 import { Request, Response } from 'express';
 import * as missionService from './mission.service.ts';
+import * as questionService from './question.service.ts';
+import { ensureSuperAdmin } from '../../utils/roles.ts';
 import catchAsync from '../../utils/catchAsync.ts';
 import response from '../../utils/response.ts';
 import type { CreateMissionInput } from '../../validations/mission.validation.ts';
@@ -9,36 +11,47 @@ import { users } from '../../db/schema/users.ts';
 import { eq } from 'drizzle-orm';
 
 export const createMission = catchAsync(async (req: Request, res: Response) => {
-  const userId = req.user?.id as string;
-  const user = await db.select().from(users).where(eq(users.id, userId)).limit(1);
-  if (!user.length || (user[0].role !== 'ADMIN' && user[0].role !== 'SUPER_ADMIN')) {
-    throw ApiError.forbidden('Only ADMIN or SUPER_ADMIN can create missions');
-  }
+  await ensureSuperAdmin(req.user?.id as string);
 
   const data = req.body as CreateMissionInput;
   const result = await missionService.createMission(data);
   response(res, 201, 'Mission created successfully', result);
 });
 
-const ensureAdmin = async (userId: string) => {
-  const user = await db.select().from(users).where(eq(users.id, userId)).limit(1);
-  if (!user.length || (user[0].role !== 'ADMIN' && user[0].role !== 'SUPER_ADMIN')) {
-    throw ApiError.forbidden('Only ADMIN or SUPER_ADMIN can manage missions');
-  }
-};
-
 export const updateMission = catchAsync(async (req: Request, res: Response) => {
-  await ensureAdmin(req.user?.id as string);
+  await ensureSuperAdmin(req.user?.id as string);
 
   const result = await missionService.updateMission(req.params.missionId as string, req.body);
   response(res, 200, 'Mission updated successfully', result);
 });
 
 export const deleteMission = catchAsync(async (req: Request, res: Response) => {
-  await ensureAdmin(req.user?.id as string);
+  await ensureSuperAdmin(req.user?.id as string);
 
   await missionService.deleteMission(req.params.missionId as string);
   response(res, 200, 'Mission deleted successfully', null);
+});
+
+export const setMissionQuestions = catchAsync(async (req: Request, res: Response) => {
+  await ensureSuperAdmin(req.user?.id as string);
+
+  const result = await questionService.replaceQuestions(
+    req.params.missionId as string,
+    req.body.questions ?? [],
+  );
+  response(res, 200, 'Pertanyaan misi disimpan', result);
+});
+
+export const getMissionQuestions = catchAsync(async (req: Request, res: Response) => {
+  const userId = req.user?.id as string;
+  const [user] = await db.select({ role: users.role }).from(users).where(eq(users.id, userId)).limit(1);
+
+  // Kunci jawaban hanya untuk panitia. Peserta menerima soal tanpa penanda
+  // jawaban benar — pemeriksaan sepenuhnya dilakukan di server.
+  const isPanitia = user?.role === 'ADMIN' || user?.role === 'SUPER_ADMIN';
+
+  const result = await questionService.getQuestions(req.params.missionId as string, isPanitia);
+  response(res, 200, 'Pertanyaan misi', result);
 });
 
 export const getMissions = catchAsync(async (req: Request, res: Response) => {

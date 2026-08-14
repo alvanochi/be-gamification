@@ -59,8 +59,14 @@ export const validateSubmission = catchAsync(async (req: Request, res: Response)
     throw ApiError.forbidden('Only ADMIN or SUPER_ADMIN can validate submissions');
   }
 
-  const { status, awardedPoint, rejectReason } = req.body as ValidateSubmissionInput;
-  await submissionService.validateSubmission(submissionId, status, validatorId, awardedPoint, rejectReason);
+  const { status, awardedPoint, units, timeSeconds, rejectReason } = req.body as ValidateSubmissionInput;
+  await submissionService.validateSubmission(
+    submissionId,
+    status,
+    validatorId,
+    { awardedPoint, units, timeSeconds },
+    rejectReason,
+  );
   response(res, 200, `Submission ${status.toLowerCase()} successfully`, null);
 });
 

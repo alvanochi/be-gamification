@@ -1,7 +1,29 @@
 import { pgTable, varchar, text, boolean, integer, timestamp, pgEnum, jsonb } from 'drizzle-orm/pg-core';
 import { sponsors } from './sponsors.ts';
 
-export const missionTypeEnum = pgEnum('mission_type', ['TANTANGAN', 'BIGGER_BETTER', 'SOAL_LOKASI']);
+// KUIS menutup jenis tugas "JAWAB PERTANYAAN" di sheet SIMULASI MR6 — misi yang
+// isinya daftar pertanyaan, bukan unggahan bukti.
+export const missionTypeEnum = pgEnum('mission_type', ['TANTANGAN', 'BIGGER_BETTER', 'SOAL_LOKASI', 'KUIS']);
+
+/**
+ * Cara skor dihitung.
+ *
+ * MR6 memakai empat gaya penilaian sekaligus:
+ *   FLAT      — nilai tetap (mis. "BERHASIL/TIDAK BERHASIL")
+ *   RANGE     — subjektif dalam rentang (mis. "50 - 100 POIN")
+ *   PER_UNIT  — per satuan hasil (mis. "1 ANAK PANAH = 50 POIN")
+ *   TIME_BASED— makin cepat makin tinggi (mis. "WAKTU YANG DITEMPUH")
+ *   AUTO_QUIZ — dihitung sistem dari jawaban benar
+ */
+export const scoringModeEnum = pgEnum('scoring_mode', [
+  'FLAT',
+  'RANGE',
+  'PER_UNIT',
+  'TIME_BASED',
+  'AUTO_QUIZ',
+]);
+
+export const questionTypeEnum = pgEnum('question_type', ['PILIHAN_GANDA', 'ISIAN_SINGKAT']);
 
 // MR6 membagi seluruh simulasi ke dua kategori besar: TERSTRUKTUR (ada pos &
 // petugas, jadwalnya per sesi) dan MANDIRI (dikerjakan kelompok sendiri, waktu bebas).
@@ -63,6 +85,23 @@ export const missions = pgTable('missions', {
 
   // Misi TERSTRUKTUR mewajibkan lapor ke petugas pos lewat check-in online.
   requiresCheckIn: boolean('requires_check_in').default(false).notNull(),
+
+  // Daftar alat yang disiapkan panitia di pos (kolom PERALATAN di MR6),
+  // mis. "1. BUSUR 4 BUAH\n2. ANAK PANAH 20 BUAH".
+  equipment: text('equipment'),
+
+  // --- Konfigurasi penilaian ---
+  scoringMode: scoringModeEnum('scoring_mode').default('FLAT').notNull(),
+
+  // PER_UNIT: poin untuk setiap satuan hasil, mis. 50 poin per anak panah.
+  pointPerUnit: integer('point_per_unit'),
+  // Batas satuan yang diakui, mis. 3 anak panah per peserta. NULL = tanpa batas.
+  maxUnits: integer('max_units'),
+
+  // TIME_BASED: waktu acuan dalam detik. Peserta yang mencapai waktu ini atau
+  // lebih cepat memperoleh poin penuh (pointWeight); yang lebih lambat
+  // memperoleh poin berkurang secara proporsional.
+  timeTargetSeconds: integer('time_target_seconds'),
 
   createdAt: timestamp('created_at', { withTimezone: false }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: false }).defaultNow().notNull(),

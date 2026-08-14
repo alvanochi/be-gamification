@@ -38,6 +38,11 @@ export const createMission = async (data: CreateMissionInput) => {
     pointMin: data.pointMin,
     pointMax: data.pointMax,
     requiresCheckIn: data.requiresCheckIn,
+    equipment: data.equipment,
+    scoringMode: data.scoringMode,
+    pointPerUnit: data.pointPerUnit,
+    maxUnits: data.maxUnits,
+    timeTargetSeconds: data.timeTargetSeconds,
   });
 
   return { id: missionId };
@@ -122,6 +127,24 @@ export const getGatekeeperStatus = async (groupId: string) => {
   return { passed: submission.length > 0, mandatoryMissions, gatekeeperMission };
 };
 
+/** Misi yang prasyaratnya sudah disetujui untuk kelompok ini. */
+const filterByPrerequisite = async (groupId: string, list: typeof missions.$inferSelect[]) => {
+  const withPrereq = list.filter(m => m.prerequisiteId);
+  if (!withPrereq.length) return list;
+
+  const approved = await db
+    .select({ missionId: submissions.missionId })
+    .from(submissions)
+    .where(and(eq(submissions.groupId, groupId), eq(submissions.status, 'APPROVED')));
+
+  const approvedIds = new Set(approved.map(s => s.missionId));
+
+  // Misi bertahap (mis. Great Tabib: jawab pertanyaan dulu, baru tantangan
+  // kedua) dimodelkan lewat prerequisiteId. Tahap lanjutan disembunyikan
+  // sampai tahap sebelumnya disetujui.
+  return list.filter(m => !m.prerequisiteId || approvedIds.has(m.prerequisiteId));
+};
+
 export const getAvailableMissions = async (groupId: string) => {
   const { passed, mandatoryMissions } = await getGatekeeperStatus(groupId);
 
@@ -130,7 +153,7 @@ export const getAvailableMissions = async (groupId: string) => {
   }
 
   const allMissions = await db.select().from(missions);
-  return allMissions;
+  return filterByPrerequisite(groupId, allMissions);
 };
 
 export const assignMission = async (missionId: string, groupId: string, assigneeUserId?: string) => {

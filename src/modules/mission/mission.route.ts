@@ -6,6 +6,7 @@ import {
   createMissionSchema,
   updateMissionSchema,
   missionCheckInSchema,
+  setQuestionsSchema,
 } from '../../validations/mission.validation.ts';
 
 const router = Router();
@@ -22,6 +23,9 @@ router.get('/my-checkins', missionController.getMyCheckIns);
 
 router.put('/:missionId', validate(updateMissionSchema), missionController.updateMission);
 router.delete('/:missionId', missionController.deleteMission);
+
+router.get('/:missionId/questions', missionController.getMissionQuestions);
+router.put('/:missionId/questions', validate(setQuestionsSchema), missionController.setMissionQuestions);
 
 router.post('/:missionId/assignments', missionController.createAssignment);
 router.post('/:missionId/check-in', validate(missionCheckInSchema), missionController.checkInMission);

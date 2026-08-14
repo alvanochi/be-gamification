@@ -15,6 +15,8 @@ import ApiError from '../../utils/ApiError.ts';
 import { assertWithinEventWindow, assertWithinMissionSession } from '../../utils/eventTime.ts';
 import { recalculateGroupScore } from '../../utils/groupScore.ts';
 import { getGatekeeperStatus } from '../mission/mission.service.ts';
+import { gradeAnswers, saveAnswers } from '../mission/question.service.ts';
+import { calculateMissionPoint } from '../../utils/scoring.ts';
 import type { SubmitMissionInput } from '../../validations/submission.validation.ts';
 import env from '../../config/env.ts';
 
@@ -76,6 +78,19 @@ export const submitMission = async (groupId: string, userId: string, data: Submi
     }
   }
 
+  // Misi bertahap: tahap lanjutan hanya terbuka setelah tahap sebelumnya
+  // disetujui. Ditegakkan di sini, bukan hanya saat daftar misi dibaca.
+  if (mission[0].prerequisiteId) {
+    const [prereq] = await db.select().from(submissions).where(and(
+      eq(submissions.missionId, mission[0].prerequisiteId),
+      eq(submissions.groupId, groupId),
+      eq(submissions.status, 'APPROVED'),
+    )).limit(1);
+    if (!prereq) {
+      throw ApiError.badRequest('Selesaikan tahap sebelumnya terlebih dahulu');
+    }
+  }
+
   // MR6: misi TERSTRUKTUR mewajibkan lapor ke petugas pos lewat check-in online.
   if (mission[0].requiresCheckIn) {
     const checkIn = await db.select().from(missionCheckins).where(and(
@@ -113,6 +128,52 @@ export const submitMission = async (groupId: string, userId: string, data: Submi
   }
 
   const submissionId = nanoid(16);
+
+  // Misi kuis diperiksa dan diberi nilai saat itu juga — tidak perlu antre di
+  // meja panitia, karena kunci jawabannya sudah pasti.
+  if (mission[0].type === 'KUIS') {
+    if (!data.answers?.length) {
+      throw ApiError.badRequest('Jawaban pertanyaan wajib diisi');
+    }
+
+    const result = await gradeAnswers(data.missionId, data.answers);
+
+    await db.transaction(async (tx: any) => {
+      await tx.insert(submissions).values({
+        id: submissionId,
+        missionId: data.missionId,
+        groupId,
+        submittedBy: userId,
+        answerText: `${result.correctCount} dari ${result.totalQuestions} jawaban benar`,
+        status: 'APPROVED',
+        awardedPoint: result.point,
+        validatedAt: new Date(),
+      });
+
+      await saveAnswers(tx, submissionId, result.graded);
+
+      if (result.point > 0) {
+        await tx.insert(scoreEntries).values({
+          id: nanoid(16),
+          groupId,
+          source: 'CHALLENGE',
+          referenceId: submissionId,
+          point: result.point,
+          createdBy: userId,
+        });
+        await recalculateGroupScore(tx, groupId);
+      }
+    });
+
+    return {
+      id: submissionId,
+      autoGraded: true,
+      correctCount: result.correctCount,
+      totalQuestions: result.totalQuestions,
+      point: result.point,
+    };
+  }
+
   await db.insert(submissions).values({
     id: submissionId,
     missionId: data.missionId,
@@ -163,38 +224,23 @@ export const validateSubmission = async (
   submissionId: string,
   status: 'APPROVED' | 'REJECTED',
   validatorId: string,
-  awardedPoint?: number,
+  scoring: { awardedPoint?: number; units?: number; timeSeconds?: number } = {},
   rejectReason?: string,
 ) => {
   const submission = await db.select().from(submissions).where(eq(submissions.id, submissionId)).limit(1);
   if (!submission.length) throw ApiError.notFound('Submission not found');
   if (submission[0].status !== 'PENDING') throw ApiError.badRequest('Submission already validated');
 
-  // Penilaian rentang MR6 (mis. "50 - 100 POIN"): jika misi punya rentang,
-  // panitia wajib menentukan nilainya sendiri di dalam rentang tersebut.
-  // Tanpa rentang, nilai tetap diambil dari pointWeight seperti sebelumnya.
+  // Poin dihitung sesuai cara penilaian misi — tetap, rentang, per satuan,
+  // atau berbasis waktu (lihat utils/scoring.ts).
   let pointsToAward = 0;
   if (status === 'APPROVED') {
     const missionRows = await db.select().from(missions)
       .where(eq(missions.id, submission[0].missionId)).limit(1);
     const mission = missionRows[0];
-    const hasRange = mission?.pointMin != null && mission?.pointMax != null;
+    if (!mission) throw ApiError.notFound('Mission not found');
 
-    if (hasRange) {
-      if (awardedPoint === undefined) {
-        throw ApiError.badRequest(
-          `Misi ini dinilai dalam rentang ${mission.pointMin} - ${mission.pointMax} poin. Mohon isi nilainya.`,
-        );
-      }
-      if (awardedPoint < mission.pointMin! || awardedPoint > mission.pointMax!) {
-        throw ApiError.badRequest(
-          `Nilai harus di antara ${mission.pointMin} dan ${mission.pointMax} poin.`,
-        );
-      }
-      pointsToAward = awardedPoint;
-    } else {
-      pointsToAward = awardedPoint ?? mission?.pointWeight ?? 0;
-    }
+    pointsToAward = calculateMissionPoint(mission, scoring);
   }
 
   await db.transaction(async (tx: any) => {

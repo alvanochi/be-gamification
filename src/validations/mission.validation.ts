@@ -43,6 +43,14 @@ const missionBody = z.object({
     pointMin: z.number().int().min(0).optional(),
     pointMax: z.number().int().min(0).optional(),
     requiresCheckIn: z.boolean().default(false),
+    equipment: z.string().optional(),
+
+    // Cara penilaian. RANGE memakai pointMin/pointMax, PER_UNIT memakai
+    // pointPerUnit, TIME_BASED memakai timeTargetSeconds.
+    scoringMode: z.enum(['FLAT', 'RANGE', 'PER_UNIT', 'TIME_BASED', 'AUTO_QUIZ']).default('FLAT'),
+    pointPerUnit: z.number().int().min(0).optional(),
+    maxUnits: z.number().int().min(1).optional(),
+    timeTargetSeconds: z.number().int().min(1).optional(),
 });
 
 export const createMissionSchema = z.object({
@@ -58,6 +66,20 @@ export const createMissionSchema = z.object({
     .refine(
       data => (data.sessionStart === undefined) === (data.sessionEnd === undefined),
       { message: 'sessionStart dan sessionEnd harus diisi bersamaan', path: ['sessionEnd'] },
+    )
+    // Tiap cara penilaian punya kolom pendukungnya sendiri — dijaga di sini
+    // supaya misi tidak tersimpan dalam keadaan tidak bisa dinilai.
+    .refine(data => data.scoringMode !== 'PER_UNIT' || data.pointPerUnit !== undefined, {
+      message: 'Penilaian per satuan membutuhkan poin per satuan',
+      path: ['pointPerUnit'],
+    })
+    .refine(data => data.scoringMode !== 'TIME_BASED' || data.timeTargetSeconds !== undefined, {
+      message: 'Penilaian berbasis waktu membutuhkan waktu acuan',
+      path: ['timeTargetSeconds'],
+    })
+    .refine(
+      data => data.scoringMode !== 'RANGE' || (data.pointMin !== undefined && data.pointMax !== undefined),
+      { message: 'Penilaian rentang membutuhkan poin minimum dan maksimum', path: ['pointMax'] },
     ),
 });
 
@@ -73,6 +95,25 @@ export const updateMissionSchema = z.object({
       data.pointMin === undefined || data.pointMax === undefined || data.pointMin <= data.pointMax,
     { message: 'pointMin tidak boleh lebih besar dari pointMax', path: ['pointMax'] },
   ),
+});
+
+export const setQuestionsSchema = z.object({
+  body: z.object({
+    questions: z
+      .array(
+        z.object({
+          questionText: z.string().min(1),
+          imageUrl: z.string().url().optional(),
+          type: z.enum(['PILIHAN_GANDA', 'ISIAN_SINGKAT']),
+          answerKey: z.string().max(255).optional(),
+          point: z.number().int().min(0).default(10),
+          options: z
+            .array(z.object({ optionText: z.string().min(1).max(500), isCorrect: z.boolean() }))
+            .optional(),
+        }),
+      )
+      .max(50),
+  }),
 });
 
 export const missionCheckInSchema = z.object({
