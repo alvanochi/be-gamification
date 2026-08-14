@@ -14,14 +14,64 @@ import { recalculateGroupScore } from '../../utils/groupScore.ts';
 import { eq, and, gt, sql } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import * as groupService from '../group/group.service.ts';
+import { ensureAdmin, ensureSuperAdmin } from '../../utils/roles.ts';
+import { submissions } from '../../db/schema/submissions.ts';
+import { calculateMissionPoint } from '../../utils/scoring.ts';
 
-// Middleware or helper to ensure admin
-const ensureAdmin = async (userId: string) => {
-    const [user] = await db.select({ role: users.role }).from(users).where(eq(users.id, userId)).limit(1);
-    if (!user || (user.role !== 'ADMIN' && user.role !== 'SUPER_ADMIN')) {
-        throw ApiError.forbidden('Only ADMIN or SUPER_ADMIN can perform this action');
+/**
+ * Daftar akun untuk pengelolaan peran (khusus Super Admin).
+ * Mengembalikan seluruh panitia, plus peserta yang cocok dengan kata kunci
+ * pencarian — supaya Super Admin bisa mencari orang yang akan diangkat.
+ */
+export const listAccounts = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    await ensureSuperAdmin(req.user?.id as string);
+
+    const search = String(req.query.search ?? '').trim().toLowerCase();
+
+    const rows = await db
+        .select({
+            id: users.id,
+            fullname: users.fullname,
+            email: users.email,
+            phoneNumber: users.phoneNumber,
+            role: users.role,
+            checkInAt: users.checkInAt,
+        })
+        .from(users);
+
+    const filtered = rows.filter(u => {
+        if (u.role !== 'PARTICIPANT') return true;
+        if (!search) return false;
+        return `${u.fullname} ${u.email ?? ''} ${u.phoneNumber ?? ''}`.toLowerCase().includes(search);
+    });
+
+    return response(res, 200, 'Accounts fetched', filtered);
+});
+
+export const setAccountRole = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    const actorId = req.user?.id as string;
+    await ensureSuperAdmin(actorId);
+
+    const targetId = req.params.userId as string;
+    const { role } = req.body ?? {};
+
+    if (!['PARTICIPANT', 'ADMIN', 'SUPER_ADMIN'].includes(role)) {
+        throw ApiError.badRequest('Peran tidak dikenali');
     }
-};
+
+    // Menurunkan peran diri sendiri bisa membuat acara kehilangan Super Admin
+    // terakhirnya di tengah jalan.
+    if (targetId === actorId && role !== 'SUPER_ADMIN') {
+        throw ApiError.badRequest('Anda tidak bisa menurunkan peran akun Anda sendiri');
+    }
+
+    const [target] = await db.select({ id: users.id }).from(users).where(eq(users.id, targetId)).limit(1);
+    if (!target) throw ApiError.notFound('Akun tidak ditemukan');
+
+    await db.update(users).set({ role, updatedAt: new Date() }).where(eq(users.id, targetId));
+
+    return response(res, 200, 'Peran akun diperbarui', { id: targetId, role });
+});
 
 export const setGroupLeader = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const userId = req.user?.id as string;
@@ -71,6 +121,83 @@ export const addManualScore = catchAsync(async (req: Request, res: Response, nex
     return response(res, 201, 'Manual score added', entry);
 });
 
+/**
+ * Input hasil dari petugas pos (MR6: pembuktian "LAPORAN PETUGAS" dan
+ * "INPUT HASIL YANG DIDAPAT, diawasi oleh petugas pos").
+ *
+ * Petugas cukup memasukkan hasil mentahnya — jumlah anak panah tepat sasaran,
+ * waktu tempuh, atau nilai penjurian — dan sistem yang menghitung poinnya
+ * sesuai cara penilaian misi. Sebelumnya perhitungan ini harus dilakukan
+ * manual di luar sistem lalu dititipkan sebagai skor manual.
+ */
+export const submitFieldResult = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    const userId = req.user?.id as string;
+    await ensureAdmin(userId);
+
+    const { groupId, missionId, units, timeSeconds, awardedPoint, note } = req.body ?? {};
+    if (!groupId || !missionId) throw ApiError.badRequest('groupId dan missionId wajib diisi');
+
+    const [mission] = await db.select().from(missions).where(eq(missions.id, missionId)).limit(1);
+    if (!mission) throw ApiError.notFound('Misi tidak ditemukan');
+
+    const [group] = await db.select({ id: groups.id }).from(groups).where(eq(groups.id, groupId)).limit(1);
+    if (!group) throw ApiError.notFound('Kelompok tidak ditemukan');
+
+    const existing = await db.select().from(submissions).where(and(
+        eq(submissions.missionId, missionId),
+        eq(submissions.groupId, groupId),
+    ));
+    if (existing.some(s => s.status === 'APPROVED' || s.status === 'PENDING')) {
+        throw ApiError.badRequest('Kelompok ini sudah punya hasil untuk misi tersebut');
+    }
+
+    const point = calculateMissionPoint(mission, { units, timeSeconds, awardedPoint });
+
+    const submissionId = nanoid(16);
+    await db.transaction(async (tx: any) => {
+        await tx.insert(submissions).values({
+            id: submissionId,
+            missionId,
+            groupId,
+            submittedBy: userId,
+            status: 'APPROVED',
+            answerText: note ?? 'Hasil dilaporkan petugas pos',
+            awardedPoint: point,
+            validatedBy: userId,
+            validatedAt: new Date(),
+        });
+
+        if (point > 0) {
+            await tx.insert(scoreEntries).values({
+                id: nanoid(16),
+                groupId,
+                source: 'CHALLENGE',
+                referenceId: submissionId,
+                point,
+                createdBy: userId,
+            });
+            await recalculateGroupScore(tx, groupId);
+        }
+    });
+
+    return response(res, 201, `Hasil tercatat — ${point} poin untuk kelompok ini`, {
+        submissionId,
+        point,
+    });
+});
+
+/** Daftar kelompok untuk pemilihan di form hasil lapangan. */
+export const listGroups = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    await ensureAdmin(req.user?.id as string);
+
+    const rows = await db
+        .select({ id: groups.id, name: groups.name, score: groups.score })
+        .from(groups)
+        .orderBy(groups.name);
+
+    return response(res, 200, 'Groups fetched', rows);
+});
+
 export const getBanners = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const banners = await db.select().from(sponsors);
     return response(res, 200, 'Banners fetched', banners);
@@ -78,7 +205,7 @@ export const getBanners = catchAsync(async (req: Request, res: Response, next: N
 
 export const createBanner = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const userId = req.user?.id as string;
-    await ensureAdmin(userId);
+    await ensureSuperAdmin(userId);
 
     const { name, logoUrl, linkUrl, orderNum, isActive } = req.body;
     if (!name || !logoUrl) throw ApiError.badRequest('name and logoUrl are required');
@@ -97,7 +224,7 @@ export const createBanner = catchAsync(async (req: Request, res: Response, next:
 
 export const updateBanner = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const userId = req.user?.id as string;
-    await ensureAdmin(userId);
+    await ensureSuperAdmin(userId);
 
     const id = req.params.id as string;
     const updateData = req.body;
@@ -113,7 +240,7 @@ export const updateBanner = catchAsync(async (req: Request, res: Response, next:
 
 export const deleteBanner = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const userId = req.user?.id as string;
-    await ensureAdmin(userId);
+    await ensureSuperAdmin(userId);
 
     const id = req.params.id as string;
 
