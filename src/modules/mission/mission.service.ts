@@ -108,7 +108,12 @@ export const deleteMission = async (missionId: string) => {
  * dengan memanggil POST /submissions langsung.
  */
 export const getGatekeeperStatus = async (groupId: string) => {
-  const mandatoryMissions = await db.select().from(missions).where(eq(missions.isMandatory, true));
+  // Urutan dipastikan berdasarkan waktu pembuatan. Tanpa ini, ketika ada lebih
+  // dari satu misi wajib, misi mana yang menjadi gerbang bergantung pada urutan
+  // baris yang dikembalikan database — bisa berubah-ubah.
+  const mandatoryMissions = await db.select().from(missions)
+    .where(eq(missions.isMandatory, true))
+    .orderBy(missions.createdAt);
 
   if (mandatoryMissions.length === 0) {
     return { passed: true, mandatoryMissions, gatekeeperMission: null };
