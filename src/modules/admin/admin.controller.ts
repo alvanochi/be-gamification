@@ -186,6 +186,101 @@ export const submitFieldResult = catchAsync(async (req: Request, res: Response, 
     });
 });
 
+export const generateGroups = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    await ensureAdmin(req.user?.id as string);
+
+    const result = await groupService.generateGroups(Number(req.body?.maxPerGroup) || 6);
+    return response(res, 201, result.message, result);
+});
+
+/**
+ * Peta progres seluruh kelompok (SRS 5.8) — jendela utama panitia saat acara
+ * berjalan: sudah sampai mana tiap kelompok, berapa yang menunggu divalidasi,
+ * dan siapa saja anggotanya yang benar-benar hadir.
+ */
+export const getMonitoring = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    await ensureAdmin(req.user?.id as string);
+
+    const rows = await db.execute(sql`
+        SELECT
+          g.id,
+          g.name,
+          g.score,
+          g.leader_id                                              AS "leaderId",
+          g.photo_url                                              AS "photoUrl",
+          g.name_set_at                                            AS "nameSetAt",
+          (SELECT COUNT(*) FROM users u WHERE u.group_id = g.id)   AS "memberCount",
+          (SELECT COUNT(*) FROM users u
+             WHERE u.group_id = g.id AND u.checkin_at IS NOT NULL) AS "presentCount",
+          (SELECT COUNT(*) FROM submissions s
+             WHERE s.group_id = g.id AND s.status = 'APPROVED')    AS "approvedCount",
+          (SELECT COUNT(*) FROM submissions s
+             WHERE s.group_id = g.id AND s.status = 'PENDING')     AS "pendingCount",
+          (SELECT COUNT(*) FROM submissions s
+             WHERE s.group_id = g.id AND s.status = 'REJECTED')    AS "rejectedCount",
+          (SELECT COUNT(*) FROM mission_checkins c
+             WHERE c.group_id = g.id AND c.checked_out_at IS NULL) AS "openCheckIns",
+          (SELECT MAX(s.created_at) FROM submissions s
+             WHERE s.group_id = g.id)                              AS "lastActivityAt"
+        FROM groups g
+        ORDER BY g.score DESC, g.name ASC
+    `);
+
+    const [{ total }] = (await db.execute(sql`SELECT COUNT(*)::int AS total FROM missions`)).rows as any[];
+
+    return response(res, 200, 'Monitoring fetched', {
+        totalMissions: Number(total),
+        groups: rows.rows.map((r: any) => ({
+            ...r,
+            memberCount: Number(r.memberCount),
+            presentCount: Number(r.presentCount),
+            approvedCount: Number(r.approvedCount),
+            pendingCount: Number(r.pendingCount),
+            rejectedCount: Number(r.rejectedCount),
+            openCheckIns: Number(r.openCheckIns),
+        })),
+    });
+});
+
+/** Rincian satu kelompok: anggota, kehadiran, riwayat misi, dan check-in pos. */
+export const getGroupDetail = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    await ensureAdmin(req.user?.id as string);
+    const groupId = req.params.groupId as string;
+
+    const members = (await db.execute(sql`
+        SELECT id, fullname, email, checkin_at AS "checkInAt"
+        FROM users WHERE group_id = ${groupId} ORDER BY fullname
+    `)).rows;
+
+    const activity = (await db.execute(sql`
+        SELECT s.id, s.status, s.awarded_point AS "awardedPoint", s.reject_reason AS "rejectReason",
+               s.created_at AS "createdAt", s.validated_at AS "validatedAt",
+               m.title AS "missionTitle",
+               u.fullname AS "submittedByName",
+               v.fullname AS "validatedByName"
+        FROM submissions s
+        JOIN missions m ON m.id = s.mission_id
+        JOIN users u    ON u.id = s.submitted_by
+        LEFT JOIN users v ON v.id = s.validated_by
+        WHERE s.group_id = ${groupId}
+        ORDER BY s.created_at DESC
+    `)).rows;
+
+    const checkIns = (await db.execute(sql`
+        SELECT c.id, m.title AS "missionTitle", c.queue_number AS "queueNumber",
+               c.checked_in_at AS "checkedInAt", c.checked_out_at AS "checkedOutAt",
+               i.fullname AS "checkedInByName", o.fullname AS "checkedOutByName"
+        FROM mission_checkins c
+        JOIN missions m ON m.id = c.mission_id
+        JOIN users i    ON i.id = c.checked_in_by
+        LEFT JOIN users o ON o.id = c.checked_out_by
+        WHERE c.group_id = ${groupId}
+        ORDER BY c.checked_in_at DESC
+    `)).rows;
+
+    return response(res, 200, 'Group detail fetched', { members, activity, checkIns });
+});
+
 /** Daftar kelompok untuk pemilihan di form hasil lapangan. */
 export const listGroups = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     await ensureAdmin(req.user?.id as string);

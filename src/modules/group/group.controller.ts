@@ -23,6 +23,14 @@ export const updateName = catchAsync(async (req: Request, res: Response) => {
   response(res, 200, 'Group name updated successfully', null);
 });
 
+export const checkNameAvailability = catchAsync(async (req: Request, res: Response) => {
+  const result = await groupService.isGroupNameAvailable(
+    String(req.query.name ?? ''),
+    req.params.groupId as string,
+  );
+  response(res, 200, 'Name checked', result);
+});
+
 export const setPhotoCompleted = catchAsync(async (req: Request, res: Response) => {
   const groupId = req.params.groupId as string;
   const { photoUrl } = req.body ?? {};

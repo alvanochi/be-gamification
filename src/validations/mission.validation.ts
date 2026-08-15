@@ -9,7 +9,7 @@ const missionBody = z.object({
     // previous MEDIA/MULTIPLE_CHOICE/SHORT_ANSWER values here didn't match
     // it at all, so no request could ever pass validation *and* the DB
     // constraint at the same time.
-    type: z.enum(['TANTANGAN', 'BIGGER_BETTER', 'SOAL_LOKASI']),
+    type: z.enum(['TANTANGAN', 'BIGGER_BETTER', 'SOAL_LOKASI', 'KUIS']),
     isMandatory: z.boolean().default(false),
     pointWeight: z.number().int().min(0),
     sponsorId: z.string().optional(),

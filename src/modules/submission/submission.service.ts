@@ -14,6 +14,7 @@ import { assignments } from '../../db/schema/assignments.ts';
 import ApiError from '../../utils/ApiError.ts';
 import { assertWithinEventWindow, assertWithinMissionSession } from '../../utils/eventTime.ts';
 import { recalculateGroupScore } from '../../utils/groupScore.ts';
+import { assertCheckedIn } from '../../utils/attendance.ts';
 import { getGatekeeperStatus } from '../mission/mission.service.ts';
 import { gradeAnswers, saveAnswers } from '../mission/question.service.ts';
 import { calculateMissionPoint } from '../../utils/scoring.ts';
@@ -62,6 +63,8 @@ export const getSubmissionsByGroup = async (groupId: string) => {
 };
 
 export const submitMission = async (groupId: string, userId: string, data: SubmitMissionInput) => {
+  await assertCheckedIn(userId);
+
   const mission = await db.select().from(missions).where(eq(missions.id, data.missionId)).limit(1);
   if (!mission.length) throw ApiError.notFound('Mission not found');
 
