@@ -1,10 +1,20 @@
 import { Request, Response } from 'express';
 import * as groupService from './group.service.ts';
+import { ensureAdmin } from '../../utils/roles.ts';
 import catchAsync from '../../utils/catchAsync.ts';
 import response from '../../utils/response.ts';
 import type { UpdateGroupNameInput, VoteLeaderInput } from '../../validations/group.validation.ts';
 
+/**
+ * Penempatan satu peserta ke kelompok.
+ *
+ * SRS 5.3 menempatkan pembentukan kelompok di tangan panitia, jadi jalur ini
+ * bukan lagi untuk peserta — hanya dipakai panitia sebagai penanganan kasus
+ * per orang (mis. peserta terlambat yang perlu segera ditempatkan).
+ */
 export const autoGroup = catchAsync(async (req: Request, res: Response) => {
+  await ensureAdmin(req.user?.id as string);
+
   const userId = req.user?.id as string; // Assuming auth middleware attaches user
   const result = await groupService.autoGroupUser(userId);
   response(res, 200, 'User auto-grouped successfully', result);
