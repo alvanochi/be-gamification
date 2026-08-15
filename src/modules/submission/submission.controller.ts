@@ -7,6 +7,7 @@ import ApiError from '../../utils/ApiError.ts';
 import { db } from '../../db/index.ts';
 import { users } from '../../db/schema/users.ts';
 import { eq } from 'drizzle-orm';
+import { assertCheckedIn } from '../../utils/attendance.ts';
 
 export const getUploadUrl = catchAsync(async (req: Request, res: Response) => {
   const { fileName, mimeType } = req.query;
@@ -30,6 +31,11 @@ export const getMyGroupSubmissions = catchAsync(async (req: Request, res: Respon
 
 export const submitMission = catchAsync(async (req: Request, res: Response) => {
   const userId = req.user?.id as string;
+  // Kehadiran diperiksa lebih dulu supaya peserta yang belum dipindai
+  // menerima pesan yang benar, bukan "harus bergabung ke kelompok dulu" —
+  // padahal justru kehadiranlah yang menghalanginya masuk kelompok.
+  await assertCheckedIn(userId);
+
   const user = await db.select().from(users).where(eq(users.id, userId)).limit(1);
   if (!user.length) throw ApiError.notFound('User not found');
   if (!user[0].groupId) throw ApiError.badRequest('User must join a group first');
