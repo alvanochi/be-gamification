@@ -66,7 +66,24 @@ export const generateGroups = async (maxPerGroup = 6) => {
     .where(sql`${users.role} = 'PARTICIPANT' AND ${users.groupId} IS NULL AND ${users.checkInAt} IS NOT NULL`);
 
   if (!waiting.length) {
-    return { created: 0, assigned: 0, message: 'Tidak ada peserta hadir yang menunggu kelompok' };
+    // Pesan "tidak ada yang menunggu" saja membingungkan: panitia tidak tahu
+    // apakah belum ada yang check-in, atau semuanya memang sudah kebagian
+    // kelompok. Sebutkan angkanya supaya jelas mana yang terjadi.
+    const [stat] = await db
+      .select({
+        total: sql<number>`COUNT(*)::int`,
+        present: sql<number>`COUNT(*) FILTER (WHERE ${users.checkInAt} IS NOT NULL)::int`,
+        grouped: sql<number>`COUNT(*) FILTER (WHERE ${users.groupId} IS NOT NULL)::int`,
+      })
+      .from(users)
+      .where(sql`${users.role} = 'PARTICIPANT'`);
+
+    const belumHadir = Number(stat.total) - Number(stat.present);
+    const message = belumHadir > 0
+      ? `Belum ada yang bisa dibagi. ${stat.grouped} peserta sudah punya kelompok, dan ${belumHadir} peserta belum dipindai panitia — pindai boarding pass mereka dulu.`
+      : `Semua ${stat.present} peserta hadir sudah punya kelompok. Tidak ada yang perlu dibagi.`;
+
+    return { created: 0, assigned: 0, message };
   }
 
   // Fisher–Yates: acak merata, tidak bergantung urutan pendaftaran.

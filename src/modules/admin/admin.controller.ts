@@ -228,8 +228,21 @@ export const getMonitoring = catchAsync(async (req: Request, res: Response, next
 
     const [{ total }] = (await db.execute(sql`SELECT COUNT(*)::int AS total FROM missions`)).rows as any[];
 
+    // Berapa peserta hadir yang belum kebagian kelompok — panitia perlu tahu
+    // ini sebelum menekan Generate Kelompok.
+    const [peserta] = (await db.execute(sql`
+        SELECT
+          COUNT(*)::int                                                            AS "totalParticipants",
+          COUNT(*) FILTER (WHERE checkin_at IS NOT NULL)::int                      AS "checkedIn",
+          COUNT(*) FILTER (WHERE checkin_at IS NOT NULL AND group_id IS NULL)::int  AS "waitingForGroup"
+        FROM users WHERE role = 'PARTICIPANT'
+    `)).rows as any[];
+
     return response(res, 200, 'Monitoring fetched', {
         totalMissions: Number(total),
+        totalParticipants: Number(peserta.totalParticipants),
+        checkedIn: Number(peserta.checkedIn),
+        waitingForGroup: Number(peserta.waitingForGroup),
         groups: rows.rows.map((r: any) => ({
             ...r,
             memberCount: Number(r.memberCount),
