@@ -242,6 +242,49 @@ export const getMonitoring = catchAsync(async (req: Request, res: Response, next
     });
 });
 
+/**
+ * Sudut pandang sebaliknya: per misi, kelompok mana saja yang sudah
+ * mengerjakannya. Peta progres menjawab "kelompok A sampai mana"; ini menjawab
+ * "misi A sudah dikerjakan siapa saja" — yang dibutuhkan penjaga pos.
+ */
+export const getMissionMonitoring = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    await ensureAdmin(req.user?.id as string);
+
+    const [{ total }] = (await db.execute(sql`SELECT COUNT(*)::int AS total FROM groups`)).rows as any[];
+
+    const rows = (await db.execute(sql`
+        SELECT
+          m.id, m.title, m.type, m.category, m.proof_type AS "proofType",
+          m.requires_check_in AS "requiresCheckIn",
+          COUNT(*) FILTER (WHERE s.status = 'APPROVED')  AS "approvedCount",
+          COUNT(*) FILTER (WHERE s.status = 'PENDING')   AS "pendingCount",
+          COUNT(*) FILTER (WHERE s.status = 'REJECTED')  AS "rejectedCount",
+          COALESCE(
+            json_agg(
+              json_build_object('groupId', g.id, 'groupName', g.name, 'status', s.status,
+                                'point', s.awarded_point, 'at', s.created_at)
+              ORDER BY s.created_at DESC
+            ) FILTER (WHERE s.id IS NOT NULL),
+            '[]'
+          ) AS groups
+        FROM missions m
+        LEFT JOIN submissions s ON s.mission_id = m.id
+        LEFT JOIN groups g      ON g.id = s.group_id
+        GROUP BY m.id
+        ORDER BY m.is_mandatory DESC, m.created_at ASC
+    `)).rows;
+
+    return response(res, 200, 'Mission monitoring fetched', {
+        totalGroups: Number(total),
+        missions: rows.map((r: any) => ({
+            ...r,
+            approvedCount: Number(r.approvedCount),
+            pendingCount: Number(r.pendingCount),
+            rejectedCount: Number(r.rejectedCount),
+        })),
+    });
+});
+
 /** Rincian satu kelompok: anggota, kehadiran, riwayat misi, dan check-in pos. */
 export const getGroupDetail = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     await ensureAdmin(req.user?.id as string);

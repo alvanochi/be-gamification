@@ -255,6 +255,18 @@ export const checkOutMission = async (missionId: string, groupId: string, userId
   if (!existing) throw ApiError.badRequest('Kelompok belum check-in di misi ini');
   if (existing.checkedOutAt) throw ApiError.badRequest('Kelompok sudah check-out dari misi ini');
 
+  // MR6 menempatkan check-out sebagai langkah penutup, setelah bukti dikirim.
+  // Tanpa penjagaan ini peserta bisa menutup pos lebih dulu lalu mengirim bukti
+  // belakangan — petugas menganggap meja sudah kosong padahal belum selesai.
+  const [submitted] = await db.select({ id: submissions.id }).from(submissions).where(and(
+    eq(submissions.missionId, missionId),
+    eq(submissions.groupId, groupId),
+  )).limit(1);
+
+  if (!submitted) {
+    throw ApiError.badRequest('Kirim bukti misi ini terlebih dahulu, baru check-out dari pos.');
+  }
+
   const checkedOutAt = new Date();
   await db.update(missionCheckins)
     .set({ checkedOutBy: userId, checkedOutAt })
