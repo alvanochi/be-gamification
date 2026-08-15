@@ -17,6 +17,7 @@ router.put('/groups/:groupId/leader', adminController.setGroupLeader);
 router.get('/groups', adminController.listGroups);
 router.post('/groups/generate', adminController.generateGroups);
 router.get('/monitoring', adminController.getMonitoring);
+router.get('/monitoring/missions', adminController.getMissionMonitoring);
 router.get('/monitoring/:groupId', adminController.getGroupDetail);
 router.post('/field-results', adminController.submitFieldResult);
 router.get('/accounts', adminController.listAccounts);
