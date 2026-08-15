@@ -6,8 +6,11 @@ import { users } from '../../db/schema/users.ts';
 import { memberConfirmations } from '../../db/schema/member_confirmations.ts';
 import { leaderVotes } from '../../db/schema/leader_votes.ts';
 import ApiError from '../../utils/ApiError.ts';
+import { assertCheckedIn } from '../../utils/attendance.ts';
 
 export const autoGroupUser = async (userId: string) => {
+  await assertCheckedIn(userId);
+
   const user = await db.select().from(users).where(eq(users.id, userId)).limit(1);
   if (!user.length) throw ApiError.notFound('User not found');
   if (user[0].groupId) throw ApiError.badRequest('User already in a group');
@@ -45,6 +48,77 @@ export const autoGroupUser = async (userId: string) => {
     .where(eq(users.id, userId));
 
   return { groupId: targetGroupId };
+};
+
+/**
+ * SRS 5.3 — "Sistem mengacak peserta hadir ke kelompok (maks 6). Algoritma acak
+ * dijalankan panitia dari dashboard (tombol Generate Kelompok)."
+ *
+ * Berbeda dari autoGroupUser yang dipicu peserta satu per satu, ini membentuk
+ * seluruh kelompok sekaligus dari kumpulan peserta yang sudah hadir. Pengacakan
+ * dilakukan agar rekan sekantor yang mendaftar berurutan tidak otomatis
+ * sekelompok — justru bercampur, sesuai tujuan acara.
+ */
+export const generateGroups = async (maxPerGroup = 6) => {
+  const waiting = await db
+    .select({ id: users.id })
+    .from(users)
+    .where(sql`${users.role} = 'PARTICIPANT' AND ${users.groupId} IS NULL AND ${users.checkInAt} IS NOT NULL`);
+
+  if (!waiting.length) {
+    return { created: 0, assigned: 0, message: 'Tidak ada peserta hadir yang menunggu kelompok' };
+  }
+
+  // Fisher–Yates: acak merata, tidak bergantung urutan pendaftaran.
+  const pool = waiting.map(u => u.id);
+  for (let i = pool.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [pool[i], pool[j]] = [pool[j], pool[i]];
+  }
+
+  let assigned = 0;
+  let created = 0;
+
+  await db.transaction(async (tx: any) => {
+    // Isi dulu kelompok yang masih longgar dan belum berketua, baru buat baru —
+    // supaya tidak meninggalkan banyak kelompok setengah penuh.
+    const openGroups = await tx.execute(sql`
+      SELECT g.id, COUNT(u.id) AS member_count
+      FROM groups g
+      LEFT JOIN users u ON u.group_id = g.id
+      WHERE g.leader_id IS NULL
+      GROUP BY g.id
+      HAVING COUNT(u.id) < ${maxPerGroup}
+      ORDER BY COUNT(u.id) DESC
+    `);
+
+    const slots: Array<{ id: string; free: number }> = openGroups.rows.map((r: any) => ({
+      id: r.id as string,
+      free: maxPerGroup - Number(r.member_count),
+    }));
+
+    for (const userId of pool) {
+      let target = slots.find(s => s.free > 0);
+
+      if (!target) {
+        const newId = nanoid(16);
+        await tx.insert(groups).values({ id: newId, name: 'Group ' + nanoid(6).toUpperCase() });
+        target = { id: newId, free: maxPerGroup };
+        slots.push(target);
+        created += 1;
+      }
+
+      await tx.update(users).set({ groupId: target.id, updatedAt: new Date() }).where(eq(users.id, userId));
+      target.free -= 1;
+      assigned += 1;
+    }
+  });
+
+  return {
+    created,
+    assigned,
+    message: `${assigned} peserta hadir dibagi ke dalam kelompok (${created} kelompok baru dibuat)`,
+  };
 };
 
 export const updateGroupName = async (groupId: string, newName: string, requesterId: string) => {
@@ -159,14 +233,14 @@ export const recordVote = async (groupId: string, voterId: string, nomineeId: st
     sql`${leaderVotes.groupId} = ${groupId} AND ${leaderVotes.round} = ${currentRound}`
   );
 
-  // Ambang mayoritas, bukan 100% kehadiran. Sebelumnya syaratnya adalah
-  // "semua anggota sudah memilih", sehingga satu peserta yang tidak hadir atau
-  // kehabisan baterai mengunci kelompoknya seharian tanpa jalan keluar.
-  // Kelompok ≤2 orang cukup 2 suara; selebihnya mayoritas sederhana.
-  const quorum = Math.max(2, Math.floor(groupMembers.length / 2) + 1);
+  // SRS 5.3: "menang dengan >= 3 suara; seri atau tidak memenuhi syarat →
+  // sistem reset dan buka voting ulang otomatis". Kelompok yang lebih kecil
+  // dari 3 orang tidak akan pernah mencapai 3 suara, jadi ambangnya dibatasi
+  // jumlah anggota agar tidak mengunci mereka selamanya.
+  const WINNING_VOTES = Math.min(3, groupMembers.length);
   const everyoneVoted = allVotes.length >= groupMembers.length;
 
-  if (groupMembers.length > 0 && allVotes.length >= Math.min(quorum, groupMembers.length)) {
+  if (groupMembers.length > 0) {
     // Tally votes
     const voteCounts: Record<string, number> = {};
     for (const v of allVotes) {
@@ -187,24 +261,41 @@ export const recordVote = async (groupId: string, voterId: string, nomineeId: st
       }
     }
 
-    // Kandidat teratas sudah tidak mungkin tersusul oleh sisa suara yang belum
-    // masuk — aman menutup pemilihan lebih awal tanpa menunggu anggota terakhir.
-    const remainingVotes = groupMembers.length - allVotes.length;
-    const runnerUp = Object.values(voteCounts).filter(c => c !== maxVotes).sort((a, b) => b - a)[0] ?? 0;
-    const isDecided = maxVotes > runnerUp + remainingVotes;
-
-    if (!tie && maxVotes > 0 && (everyoneVoted || isDecided)) {
+    // Menang begitu ambang tercapai dan tidak seri — tidak perlu menunggu
+    // anggota yang belum memilih.
+    if (!tie && maxVotes >= WINNING_VOTES) {
       await db.update(groups).set({ leaderId: winningCandidate, updatedAt: new Date() }).where(eq(groups.id, groupId));
       return { status: 'LEADER_ELECTED', leaderId: winningCandidate };
     }
 
     if (everyoneVoted) {
-      // Semua sudah memilih tapi hasilnya seri — perlu putaran ulang.
+      // Semua sudah memilih tapi hasilnya seri atau tidak ada yang mencapai
+      // ambang. SRS meminta sistem me-reset dan membuka voting ulang sendiri,
+      // bukan sekadar memberi tahu klien — suara ronde ini dibuang supaya
+      // peserta bisa langsung memilih lagi tanpa menunggu tindakan panitia.
+      await db.delete(leaderVotes).where(
+        sql`${leaderVotes.groupId} = ${groupId} AND ${leaderVotes.round} = ${currentRound}`,
+      );
       return { status: 'NEEDS_REVOTE', newRound: currentRound + 1 };
     }
   }
 
   return { status: 'VOTE_RECORDED' };
+};
+
+/** Cek keunikan nama kelompok secara langsung, untuk umpan balik saat mengetik. */
+export const isGroupNameAvailable = async (name: string, groupId: string) => {
+  const trimmed = name.trim();
+  if (!trimmed) return { available: false, reason: 'Nama kelompok tidak boleh kosong' };
+  if (trimmed.length < 3) return { available: false, reason: 'Nama minimal 3 karakter' };
+
+  const [taken] = await db.select({ id: groups.id }).from(groups)
+    .where(sql`LOWER(${groups.name}) = LOWER(${trimmed})`).limit(1);
+
+  if (taken && taken.id !== groupId) {
+    return { available: false, reason: 'Nama ini sudah dipakai kelompok lain' };
+  }
+  return { available: true, reason: null };
 };
 
 /**

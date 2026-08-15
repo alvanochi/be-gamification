@@ -7,6 +7,7 @@ import { assignments } from '../../db/schema/assignments.ts';
 import { missionCheckins } from '../../db/schema/mission_checkins.ts';
 import ApiError from '../../utils/ApiError.ts';
 import { assertWithinEventWindow, assertWithinMissionSession } from '../../utils/eventTime.ts';
+import { assertCheckedIn } from '../../utils/attendance.ts';
 import type { CreateMissionInput } from '../../validations/mission.validation.ts';
 
 export const createMission = async (data: CreateMissionInput) => {
@@ -218,6 +219,8 @@ export const checkInMission = async (
   userId: string,
   queueNumber?: string,
 ) => {
+  await assertCheckedIn(userId);
+
   const mission = await db.select().from(missions).where(eq(missions.id, missionId)).limit(1);
   if (!mission.length) throw ApiError.notFound('Mission not found');
 

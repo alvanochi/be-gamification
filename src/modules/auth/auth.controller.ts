@@ -1,7 +1,7 @@
 import type { NextFunction, Request, Response } from 'express';
 import catchAsync from '../../utils/catchAsync.ts';
 import response from '../../utils/response.ts';
-import { verifyUserCredential, checkInUser } from '../user/user.service.ts';
+import { verifyUserCredential } from '../user/user.service.ts';
 import ApiError from '../../utils/ApiError.ts';
 import { generateAccessTokenHelper, generateRefreshTokenHelper, verifyRefreshTokenHelper } from '../../utils/token.ts';
 import { addRefreshToken, deleteRefreshToken, verifyAndRefreshToken } from './auth.service.ts';
@@ -19,7 +19,12 @@ export const loginHandler = catchAsync(async (req: Request, res: Response, next:
   const refreshToken = generateRefreshTokenHelper({ id: userId });
 
   await addRefreshToken({ userId, refreshToken });
-  await checkInUser(userId);
+
+  // Kehadiran TIDAK lagi dicatat saat login. Sebelumnya login pertama langsung
+  // menandai peserta "hadir", sehingga pemindaian QR oleh panitia jadi tidak
+  // ada artinya — peserta bisa berstatus hadir dari rumah. Sekarang check-in
+  // hanya tercatat lewat POST /users/check-in/qr saat panitia memindai
+  // boarding pass peserta di lokasi.
 
   return response(res, 201, 'Authentication berhasil ditambahkan', {
     accessToken,

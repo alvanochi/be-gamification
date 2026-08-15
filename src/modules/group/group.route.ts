@@ -14,6 +14,7 @@ router.put('/:groupId/name', validate(updateGroupNameSchema), groupController.up
 router.post('/:groupId/vote-leader', validate(voteLeaderSchema), groupController.voteLeader);
 router.post('/:groupId/confirm/:targetUserId', groupController.confirmMember);
 router.get('/:groupId/confirmations', groupController.getConfirmations);
+router.get('/:groupId/check-name', groupController.checkNameAvailability);
 router.post('/:groupId/photo', groupController.setPhotoCompleted);
 
 export default router;
