@@ -14,6 +14,7 @@ import * as leaderVotesSchema from './schema/leader_votes.ts';
 import * as missionCheckinsSchema from './schema/mission_checkins.ts';
 import * as missionQuestionsSchema from './schema/mission_questions.ts';
 import * as groupCategoriesSchema from './schema/group_categories.ts';
+import * as eventSettingsSchema from './schema/event_settings.ts';
 export const schema = {
   ...usersSchema,
   ...authenticationsSchema,
@@ -29,6 +30,7 @@ export const schema = {
   ...missionCheckinsSchema,
   ...missionQuestionsSchema,
   ...groupCategoriesSchema,
+  ...eventSettingsSchema,
 };
 
 export const db = drizzle(pool, { schema });

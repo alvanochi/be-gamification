@@ -17,6 +17,8 @@ import * as groupService from '../group/group.service.ts';
 import { ensureAdmin, ensureSuperAdmin } from '../../utils/roles.ts';
 import { submissions } from '../../db/schema/submissions.ts';
 import { calculateMissionPoint } from '../../utils/scoring.ts';
+import { getSettings } from '../settings/settings.service.ts';
+import { broadcast, broadcastToGroup } from '../../realtime/hub.ts';
 
 /**
  * Daftar akun untuk pengelolaan peran (khusus Super Admin).
@@ -186,6 +188,88 @@ export const submitFieldResult = catchAsync(async (req: Request, res: Response, 
     });
 });
 
+/** Antrean pertukaran Bigger Better yang menunggu validasi panitia. */
+export const getBarterQueue = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    await ensureAdmin(req.user?.id as string);
+
+    const rows = (await db.execute(sql`
+        SELECT b.id, b.step_no AS "stepNo", b.item_from AS "itemFrom", b.item_to AS "itemTo",
+               b.partner_name AS "partnerName", b.video_url AS "mediaUrl", b.created_at AS "createdAt",
+               g.id AS "groupId", g.name AS "groupName", m.title AS "missionTitle"
+        FROM barter_steps b
+        JOIN assignments a ON a.id = b.assignment_id
+        JOIN groups g      ON g.id = a.group_id
+        JOIN missions m    ON m.id = a.mission_id
+        WHERE b.status = 'PENDING'
+        ORDER BY b.created_at ASC
+    `)).rows;
+
+    return response(res, 200, 'Barter queue fetched', rows);
+});
+
+/**
+ * Validasi satu pertukaran. Setiap pertukaran yang disetujui bernilai poin
+ * tetap yang bisa diatur panitia — pemenangnya adalah kelompok dengan
+ * pertukaran sah terbanyak.
+ */
+export const validateBarterStep = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    const userId = req.user?.id as string;
+    await ensureAdmin(userId);
+
+    const stepId = req.params.stepId as string;
+    const { status, rejectReason } = req.body ?? {};
+    if (!['APPROVED', 'REJECTED'].includes(status)) {
+        throw ApiError.badRequest('status harus APPROVED atau REJECTED');
+    }
+
+    const [step] = await db.select().from(barterSteps).where(eq(barterSteps.id, stepId)).limit(1);
+    if (!step) throw ApiError.notFound('Pertukaran tidak ditemukan');
+    if (step.status !== 'PENDING') throw ApiError.badRequest('Pertukaran ini sudah divalidasi');
+
+    const [assignment] = await db.select().from(assignments)
+        .where(eq(assignments.id, step.assignmentId)).limit(1);
+    if (!assignment) throw ApiError.notFound('Assignment tidak ditemukan');
+
+    const settings = await getSettings();
+    const point = status === 'APPROVED' ? settings.barterPointPerStep : 0;
+
+    await db.transaction(async (tx: any) => {
+        await tx.update(barterSteps).set({
+            status,
+            isValid: status === 'APPROVED',
+            awardedPoint: point,
+            rejectReason: status === 'REJECTED' ? (rejectReason ?? null) : null,
+            validatedBy: userId,
+            validatedAt: new Date(),
+            updatedAt: new Date(),
+        }).where(eq(barterSteps.id, stepId));
+
+        if (point > 0) {
+            await tx.insert(scoreEntries).values({
+                id: nanoid(16),
+                groupId: assignment.groupId,
+                source: 'BARTER',
+                referenceId: stepId,
+                point,
+                createdBy: userId,
+            });
+            await recalculateGroupScore(tx, assignment.groupId);
+        }
+    });
+
+    broadcastToGroup(assignment.groupId, 'barter:validated', { stepId, status, point });
+    broadcast('leaderboard:changed', { groupId: assignment.groupId });
+
+    return response(
+        res,
+        200,
+        status === 'APPROVED'
+            ? `Pertukaran disetujui — ${point} poin untuk kelompok ini`
+            : 'Pertukaran ditolak',
+        { stepId, status, point },
+    );
+});
+
 export const generateGroups = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     await ensureAdmin(req.user?.id as string);
 
@@ -200,6 +284,12 @@ export const generateGroups = catchAsync(async (req: Request, res: Response, nex
  */
 export const getMonitoring = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     await ensureAdmin(req.user?.id as string);
+
+    const page = Math.max(1, Number(req.query.page) || 1);
+    const perPage = Math.min(200, Math.max(5, Number(req.query.perPage) || 25));
+    const offset = (page - 1) * perPage;
+
+    const [{ count: groupTotal }] = (await db.execute(sql`SELECT COUNT(*)::int AS count FROM groups`)).rows as any[];
 
     const rows = await db.execute(sql`
         SELECT
@@ -224,6 +314,7 @@ export const getMonitoring = catchAsync(async (req: Request, res: Response, next
              WHERE s.group_id = g.id)                              AS "lastActivityAt"
         FROM groups g
         ORDER BY g.score DESC, g.name ASC
+        LIMIT ${perPage} OFFSET ${offset}
     `);
 
     const [{ total }] = (await db.execute(sql`SELECT COUNT(*)::int AS total FROM missions`)).rows as any[];
@@ -239,6 +330,10 @@ export const getMonitoring = catchAsync(async (req: Request, res: Response, next
     `)).rows as any[];
 
     return response(res, 200, 'Monitoring fetched', {
+        page,
+        perPage,
+        totalGroups: Number(groupTotal),
+        totalPages: Math.max(1, Math.ceil(Number(groupTotal) / perPage)),
         totalMissions: Number(total),
         totalParticipants: Number(peserta.totalParticipants),
         checkedIn: Number(peserta.checkedIn),
@@ -265,6 +360,11 @@ export const getMissionMonitoring = catchAsync(async (req: Request, res: Respons
 
     const [{ total }] = (await db.execute(sql`SELECT COUNT(*)::int AS total FROM groups`)).rows as any[];
 
+    const page = Math.max(1, Number(req.query.page) || 1);
+    const perPage = Math.min(200, Math.max(5, Number(req.query.perPage) || 25));
+    const offset = (page - 1) * perPage;
+    const [{ count: missionTotal }] = (await db.execute(sql`SELECT COUNT(*)::int AS count FROM missions`)).rows as any[];
+
     const rows = (await db.execute(sql`
         SELECT
           m.id, m.title, m.type, m.category, m.proof_type AS "proofType",
@@ -285,9 +385,14 @@ export const getMissionMonitoring = catchAsync(async (req: Request, res: Respons
         LEFT JOIN groups g      ON g.id = s.group_id
         GROUP BY m.id
         ORDER BY m.is_mandatory DESC, m.created_at ASC
+        LIMIT ${perPage} OFFSET ${offset}
     `)).rows;
 
     return response(res, 200, 'Mission monitoring fetched', {
+        page,
+        perPage,
+        totalMissions: Number(missionTotal),
+        totalPages: Math.max(1, Math.ceil(Number(missionTotal) / perPage)),
         totalGroups: Number(total),
         missions: rows.map((r: any) => ({
             ...r,

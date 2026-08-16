@@ -1,14 +1,16 @@
 import { sql } from 'drizzle-orm';
 import { db } from '../../db/index.ts';
+import { getSettings } from '../settings/settings.service.ts';
 
-export const getLeaderboard = async () => {
+export const getLeaderboard = async (limit?: number) => {
+  const top = limit ?? (await getSettings()).leaderboardTopN;
   const result = await db.execute(sql`
     SELECT g.id, g.name, COALESCE(SUM(s.point), 0)::int as score
     FROM groups g
     LEFT JOIN score_entries s ON s.group_id = g.id
     GROUP BY g.id
     ORDER BY score DESC
-    LIMIT 50
+    LIMIT ${top}
   `);
   return result.rows;
 };

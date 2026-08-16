@@ -8,6 +8,7 @@ import { missionCheckins } from '../../db/schema/mission_checkins.ts';
 import ApiError from '../../utils/ApiError.ts';
 import { assertWithinEventWindow, assertWithinMissionSession } from '../../utils/eventTime.ts';
 import { assertCheckedIn } from '../../utils/attendance.ts';
+import { getSettings } from '../settings/settings.service.ts';
 import type { CreateMissionInput } from '../../validations/mission.validation.ts';
 
 export const createMission = async (data: CreateMissionInput) => {
@@ -152,6 +153,11 @@ const filterByPrerequisite = async (groupId: string, list: typeof missions.$infe
 };
 
 export const getAvailableMissions = async (groupId: string) => {
+  // Peserta dikumpulkan dan dibriefing lebih dulu; daftar misi baru terbuka
+  // setelah panitia menekan "Munculkan Misi".
+  const settings = await getSettings();
+  if (!settings.missionsReleased) return [];
+
   const { passed, mandatoryMissions } = await getGatekeeperStatus(groupId);
 
   if (!passed) {
