@@ -1,10 +1,31 @@
 import type { NextFunction, Request, Response } from 'express';
 import catchAsync from '../../utils/catchAsync.ts';
 import response from '../../utils/response.ts';
-import { verifyUserCredential } from '../user/user.service.ts';
+import { verifyUserCredential, findParticipantByQrToken } from '../user/user.service.ts';
 import ApiError from '../../utils/ApiError.ts';
 import { generateAccessTokenHelper, generateRefreshTokenHelper, verifyRefreshTokenHelper } from '../../utils/token.ts';
 import { addRefreshToken, deleteRefreshToken, verifyAndRefreshToken } from './auth.service.ts';
+
+/**
+ * Login peserta lewat QR cetak.
+ *
+ * Peserta didaftarkan panitia lebih dulu, lalu QR pribadinya dicetak dan
+ * dibagikan. Memindai QR itu langsung membuka sesi — tidak perlu mengetik
+ * email maupun nomor telepon, yang akan sangat memperlambat antrean.
+ */
+export const loginByQrHandler = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+  const { qrToken } = req.body ?? {};
+  if (!qrToken) return next(ApiError.badRequest('qrToken wajib diisi'));
+
+  const user = await findParticipantByQrToken(qrToken);
+  if (!user) return next(ApiError.unauthorized('QR tidak dikenali atau bukan milik peserta'));
+
+  const accessToken = generateAccessTokenHelper({ id: user.id });
+  const refreshToken = generateRefreshTokenHelper({ id: user.id });
+  await addRefreshToken({ userId: user.id, refreshToken });
+
+  return response(res, 201, `Selamat datang, ${user.fullname}`, { accessToken, refreshToken });
+});
 
 export const loginHandler = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
   const { email, phoneNumber } = req.body;

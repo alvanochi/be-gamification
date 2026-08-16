@@ -5,8 +5,14 @@ import { groups } from '../../db/schema/groups.ts';
 import { users } from '../../db/schema/users.ts';
 import { memberConfirmations } from '../../db/schema/member_confirmations.ts';
 import { leaderVotes } from '../../db/schema/leader_votes.ts';
+import { groupCategories } from '../../db/schema/group_categories.ts';
 import ApiError from '../../utils/ApiError.ts';
 import { assertCheckedIn } from '../../utils/attendance.ts';
+import { broadcastToGroup } from '../../realtime/hub.ts';
+import { scoreEntries } from '../../db/schema/score_entries.ts';
+import { recalculateGroupScore } from '../../utils/groupScore.ts';
+import { calculateFormationPoint, formationSecondsLeft } from '../../utils/formationScore.ts';
+import { getSettings } from '../settings/settings.service.ts';
 
 export const autoGroupUser = async (userId: string) => {
   await assertCheckedIn(userId);
@@ -119,7 +125,12 @@ export const generateGroups = async (maxPerGroup = 6) => {
 
       if (!target) {
         const newId = nanoid(16);
-        await tx.insert(groups).values({ id: newId, name: 'Group ' + nanoid(6).toUpperCase() });
+        // startedAt menandai awal hitung mundur pembentukan kelompok.
+        await tx.insert(groups).values({
+          id: newId,
+          name: 'Group ' + nanoid(6).toUpperCase(),
+          startedAt: new Date(),
+        });
         target = { id: newId, free: maxPerGroup };
         slots.push(target);
         created += 1;
@@ -153,18 +164,71 @@ export const updateGroupName = async (groupId: string, newName: string, requeste
     throw ApiError.badRequest('Group name already exists');
   }
 
-  await db.update(groups)
-    .set({ name: newName, nameSetAt: new Date(), updatedAt: new Date() })
-    .where(eq(groups.id, groupId));
+  // Nama kelompok menutup tahap onboarding — di sinilah hitung mundur berhenti
+  // dan poin pembentukan diberikan.
+  const now = new Date();
+  const settings = await getSettings();
+  const alreadyScored = group[0].nameSetAt !== null;
+  const point = calculateFormationPoint(group[0].startedAt, now, settings);
+
+  await db.transaction(async (tx: any) => {
+    await tx.update(groups)
+      .set({
+        name: newName,
+        nameSetAt: group[0].nameSetAt ?? now,
+        formationPoint: alreadyScored ? group[0].formationPoint : point,
+        updatedAt: now,
+      })
+      .where(eq(groups.id, groupId));
+
+    // Poin hanya diberikan sekali; mengganti nama belakangan tidak menambah.
+    if (!alreadyScored && point > 0) {
+      await tx.insert(scoreEntries).values({
+        id: nanoid(16),
+        groupId,
+        source: 'MANUAL',
+        referenceId: `formation:${groupId}`,
+        point,
+        createdBy: requesterId,
+      });
+      await recalculateGroupScore(tx, groupId);
+    }
+  });
+
+  broadcastToGroup(groupId, 'group:updated', { groupId, name: newName, formationPoint: point });
+  return { formationPoint: alreadyScored ? group[0].formationPoint : point };
 };
 
-export const setGroupPhotoCompleted = async (groupId: string, photoUrl?: string) => {
-  const group = await db.select().from(groups).where(eq(groups.id, groupId)).limit(1);
-  if (!group.length) throw ApiError.notFound('Group not found');
+/**
+ * Foto selfie kelompok — cukup satu unggahan per kelompok.
+ *
+ * Siapa pun anggota boleh mengunggah, tapi yang pertama masuklah yang tercatat;
+ * anggota lain diberi tahu namanya dan tidak bisa menimpanya.
+ */
+export const setGroupPhotoCompleted = async (groupId: string, userId: string, photoUrl?: string) => {
+  const [group] = await db.select().from(groups).where(eq(groups.id, groupId)).limit(1);
+  if (!group) throw ApiError.notFound('Group not found');
+
+  if (group.photoCompletedAt) {
+    const [by] = group.photoBy
+      ? await db.select({ fullname: users.fullname }).from(users).where(eq(users.id, group.photoBy)).limit(1)
+      : [];
+    throw ApiError.badRequest(
+      by ? `Foto kelompok sudah diunggah oleh ${by.fullname}.` : 'Foto kelompok sudah diunggah.',
+    );
+  }
 
   await db.update(groups)
-    .set({ photoCompletedAt: new Date(), photoUrl, updatedAt: new Date() })
+    .set({ photoCompletedAt: new Date(), photoUrl, photoBy: userId, updatedAt: new Date() })
     .where(eq(groups.id, groupId));
+
+  const [uploader] = await db.select({ fullname: users.fullname }).from(users).where(eq(users.id, userId)).limit(1);
+  broadcastToGroup(groupId, 'group:photo', {
+    groupId,
+    photoUrl,
+    photoBy: userId,
+    photoByName: uploader?.fullname ?? null,
+  });
 };
 
 export const confirmMember = async (groupId: string, confirmerId: string, confirmedId: string) => {
@@ -282,6 +346,7 @@ export const recordVote = async (groupId: string, voterId: string, nomineeId: st
     // anggota yang belum memilih.
     if (!tie && maxVotes >= WINNING_VOTES) {
       await db.update(groups).set({ leaderId: winningCandidate, updatedAt: new Date() }).where(eq(groups.id, groupId));
+      broadcastToGroup(groupId, 'group:leader-elected', { groupId, leaderId: winningCandidate });
       return { status: 'LEADER_ELECTED', leaderId: winningCandidate };
     }
 
@@ -293,10 +358,12 @@ export const recordVote = async (groupId: string, voterId: string, nomineeId: st
       await db.delete(leaderVotes).where(
         sql`${leaderVotes.groupId} = ${groupId} AND ${leaderVotes.round} = ${currentRound}`,
       );
+      broadcastToGroup(groupId, 'group:revote', { groupId, round: currentRound + 1 });
       return { status: 'NEEDS_REVOTE', newRound: currentRound + 1 };
     }
   }
 
+  broadcastToGroup(groupId, 'group:vote', { groupId });
   return { status: 'VOTE_RECORDED' };
 };
 
@@ -345,8 +412,32 @@ export const getGroupDetails = async (groupId: string) => {
     role: users.role,
   }).from(users).where(eq(users.groupId, groupId));
 
+  const settings = await getSettings();
+
+  // Kategori ikut dikirim beserta warnanya supaya penandaan di layar peserta
+  // dan panitia memakai warna yang sama.
+  const [category] = group[0].categoryId
+    ? await db.select().from(groupCategories).where(eq(groupCategories.id, group[0].categoryId)).limit(1)
+    : [];
+
+  const [photoByUser] = group[0].photoBy
+    ? await db.select({ fullname: users.fullname }).from(users).where(eq(users.id, group[0].photoBy)).limit(1)
+    : [];
+
   return {
     ...group[0],
     members,
+    category: category ?? null,
+    photoByName: photoByUser?.fullname ?? null,
+    // Hitung mundur pembentukan kelompok; berhenti begitu nama tersimpan.
+    formationSecondsLeft: group[0].nameSetAt
+      ? 0
+      : formationSecondsLeft(group[0].startedAt, settings.formationLimitMinutes),
+    formationRule: {
+      limitMinutes: settings.formationLimitMinutes,
+      graceMinutes: settings.formationGraceMinutes,
+      fullPoint: settings.formationFullPoint,
+      latePoint: settings.formationLatePoint,
+    },
   };
 };

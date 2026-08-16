@@ -10,6 +10,18 @@ export const groups = pgTable('groups', {
   // URL foto kelompok di R2. Sebelumnya langkah ini hanya membalik timestamp di
   // atas, sehingga fotonya tidak pernah benar-benar tersimpan di mana pun.
   photoUrl: varchar('photo_url', { length: 1024 }),
+  // Siapa yang pertama mengunggah foto kelompok. Anggota lain diberi tahu
+  // namanya, dan tidak bisa mengunggah lagi setelah ini terisi.
+  photoBy: varchar('photo_by', { length: 50 }),
+
+  // Kategori kelompok (putra/putri/campuran/dll) beserta warnanya.
+  categoryId: varchar('category_id', { length: 50 }),
+
+  // Penanda mulai untuk hitung mundur pembentukan kelompok. Diisi saat
+  // kelompok terbentuk; poin pembentukan dihitung dari selisih waktu ini
+  // sampai nama kelompok tersimpan.
+  startedAt: timestamp('started_at', { withTimezone: false }),
+  formationPoint: integer('formation_point'),
   nameSetAt: timestamp('name_set_at', { withTimezone: false }), // null until the leader deliberately names the group; the placeholder auto-name at creation doesn't count
   createdAt: timestamp('created_at', { withTimezone: false }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: false }).defaultNow().notNull(),

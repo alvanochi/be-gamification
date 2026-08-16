@@ -13,6 +13,8 @@ router.post('/banners', adminController.createBanner);
 router.put('/banners/:id', adminController.updateBanner);
 router.delete('/banners/:id', adminController.deleteBanner);
 router.post('/barter/:assignmentId/verify', adminController.verifyBarter);
+router.get('/barter/queue', adminController.getBarterQueue);
+router.put('/barter/steps/:stepId/validate', adminController.validateBarterStep);
 router.put('/groups/:groupId/leader', adminController.setGroupLeader);
 router.get('/groups', adminController.listGroups);
 router.post('/groups/generate', adminController.generateGroups);

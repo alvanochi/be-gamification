@@ -44,7 +44,7 @@ export const checkNameAvailability = catchAsync(async (req: Request, res: Respon
 export const setPhotoCompleted = catchAsync(async (req: Request, res: Response) => {
   const groupId = req.params.groupId as string;
   const { photoUrl } = req.body ?? {};
-  await groupService.setGroupPhotoCompleted(groupId, photoUrl);
+  await groupService.setGroupPhotoCompleted(groupId, req.user?.id as string, photoUrl);
   response(res, 200, 'Group photo step completed', null);
 });
 

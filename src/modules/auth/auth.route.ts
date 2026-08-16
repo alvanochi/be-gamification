@@ -7,6 +7,7 @@ import { loginSchema, refreshTokenSchema } from '../../validations/auth.validati
 const router = Router();
 
 router.post('/', validate({ body: loginSchema }), authController.loginHandler);
+router.post('/qr', authController.loginByQrHandler);
 router.put('/', validate({ body: refreshTokenSchema }), authController.refreshTokenHandler);
 router.delete('/', authenticate, authController.logoutHandler);
 

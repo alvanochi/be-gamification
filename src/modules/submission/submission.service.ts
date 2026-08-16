@@ -1,6 +1,6 @@
 import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
-import { eq, and } from 'drizzle-orm';
+import { eq, and, desc } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import { db } from '../../db/index.ts';
 import { submissions } from '../../db/schema/submissions.ts';
@@ -18,6 +18,7 @@ import { assertCheckedIn } from '../../utils/attendance.ts';
 import { getGatekeeperStatus } from '../mission/mission.service.ts';
 import { gradeAnswers, saveAnswers } from '../mission/question.service.ts';
 import { calculateMissionPoint } from '../../utils/scoring.ts';
+import { getSettings } from '../settings/settings.service.ts';
 import type { SubmitMissionInput } from '../../validations/submission.validation.ts';
 import env from '../../config/env.ts';
 
@@ -64,6 +65,13 @@ export const getSubmissionsByGroup = async (groupId: string) => {
 
 export const submitMission = async (groupId: string, userId: string, data: SubmitMissionInput) => {
   await assertCheckedIn(userId);
+
+  // Sama seperti daftar misi: sebelum panitia mengumumkan mulai, tidak ada
+  // yang boleh dikirim — termasuk lewat pemanggilan endpoint langsung.
+  const settings = await getSettings();
+  if (!settings.missionsReleased) {
+    throw ApiError.badRequest('Misi belum dibuka panitia. Tunggu pengumuman dimulainya acara.');
+  }
 
   const mission = await db.select().from(missions).where(eq(missions.id, data.missionId)).limit(1);
   if (!mission.length) throw ApiError.notFound('Mission not found');
@@ -311,6 +319,22 @@ export const submitBarterStep = async (groupId: string, data: any) => {
   ).limit(1);
 
   if (existingStep.length) throw ApiError.badRequest('Barter step already exists');
+
+  // Alur MR6: tukar → kirim bukti → tunggu validasi → disetujui → tukar lagi.
+  // Selama masih ada langkah yang menunggu atau ditolak, kelompok belum boleh
+  // menukar berikutnya.
+  const previous = await db.select().from(barterSteps)
+    .where(eq(barterSteps.assignmentId, assignmentId))
+    .orderBy(desc(barterSteps.stepNo)).limit(1);
+
+  if (previous.length) {
+    if (previous[0].status === 'PENDING') {
+      throw ApiError.badRequest('Pertukaran sebelumnya masih menunggu validasi panitia');
+    }
+    if (previous[0].status === 'REJECTED') {
+      throw ApiError.badRequest('Pertukaran sebelumnya ditolak — perbaiki dan kirim ulang');
+    }
+  }
 
   const stepId = nanoid(16);
   await db.insert(barterSteps).values({
