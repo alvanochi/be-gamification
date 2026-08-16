@@ -43,6 +43,24 @@ export const createUser = async ({ email, phoneNumber, fullname, businessName, y
  * Check-in peserta berdasarkan QR yang dipindai panitia.
  * Idempoten: memindai ulang QR yang sama tidak menimpa waktu check-in pertama.
  */
+/**
+ * Tukar token QR cetak menjadi identitas peserta untuk login.
+ *
+ * Token ini bearer credential — siapa pun yang memegang kertasnya bisa masuk.
+ * Karena itu hanya berlaku untuk peran PARTICIPANT: akun panitia tidak pernah
+ * bisa dimasuki lewat jalur ini, sekalipun tokennya bocor.
+ */
+export const findParticipantByQrToken = async (qrToken: string) => {
+    const [user] = await db
+        .select({ id: users.id, role: users.role, fullname: users.fullname })
+        .from(users)
+        .where(eq(users.qrToken, qrToken))
+        .limit(1);
+
+    if (!user || user.role !== 'PARTICIPANT') return null;
+    return user;
+};
+
 export const checkInByQrToken = async (qrToken: string) => {
     const [user] = await db
         .select({
