@@ -17,11 +17,9 @@ const envSchema = Joi.object({
     ACCESS_TOKEN_AGE: Joi.number().default(180),
     REFRESH_TOKEN_AGE: Joi.number().default(10080),
 
-    R2_ACCOUNT_ID: Joi.string().optional(),
-    R2_ACCESS_KEY_ID: Joi.string().optional(),
-    R2_SECRET_ACCESS_KEY: Joi.string().optional(),
-    R2_BUCKET_NAME: Joi.string().optional(),
-    R2_PUBLIC_DOMAIN: Joi.string().optional(),
+    // Awalan URL media bila API dilayani lewat domain lain (mis. di balik
+    // reverse proxy). Kosong berarti disusun dari permintaan yang masuk.
+    MEDIA_BASE_URL: Joi.string().optional(),
 
     // BR-04 Time Box: jendela 12 jam harian tempat seluruh aktivitas pengerjaan
     // diizinkan. Format "HH:MM" waktu lokal acara. Kosongkan salah satunya untuk
@@ -53,11 +51,7 @@ const env = value as {
     REFRESH_TOKEN_KEY: string;
     ACCESS_TOKEN_AGE: number;
     REFRESH_TOKEN_AGE: number;
-    R2_ACCOUNT_ID?: string;
-    R2_ACCESS_KEY_ID?: string;
-    R2_SECRET_ACCESS_KEY?: string;
-    R2_BUCKET_NAME?: string;
-    R2_PUBLIC_DOMAIN?: string;
+    MEDIA_BASE_URL?: string;
     EVENT_WINDOW_START?: string;
     EVENT_WINDOW_END?: string;
     EVENT_TIMEZONE_OFFSET: number;

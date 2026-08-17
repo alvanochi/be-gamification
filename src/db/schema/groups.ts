@@ -7,7 +7,7 @@ export const groups = pgTable('groups', {
   leaderId: varchar('leader_id', { length: 50 }), // Circular reference to users, handled in relations or explicitly
   score: integer('score').default(0).notNull(),
   photoCompletedAt: timestamp('photo_completed_at', { withTimezone: false }),
-  // URL foto kelompok di R2. Sebelumnya langkah ini hanya membalik timestamp di
+  // URL foto kelompok. Sebelumnya langkah ini hanya membalik timestamp di
   // atas, sehingga fotonya tidak pernah benar-benar tersimpan di mana pun.
   photoUrl: varchar('photo_url', { length: 1024 }),
   // Siapa yang pertama mengunggah foto kelompok. Anggota lain diberi tahu
