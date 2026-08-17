@@ -13,8 +13,13 @@ export const missionCheckins = pgTable(
     id: varchar('id', { length: 50 }).primaryKey(),
     missionId: varchar('mission_id', { length: 50 }).notNull().references(() => missions.id),
     groupId: varchar('group_id', { length: 50 }).notNull().references(() => groups.id),
+    // Untuk misi TERSTRUKTUR ini adalah petugas pos yang memindai, bukan
+    // peserta — peserta tidak bisa mencatat kehadirannya sendiri di pos.
     checkedInBy: varchar('checked_in_by', { length: 50 }).notNull().references(() => users.id),
     checkedOutBy: varchar('checked_out_by', { length: 50 }).references(() => users.id),
+    // Peserta yang QR-nya dipindai petugas. Menyimpan jejak siapa dari
+    // kelompok itu yang benar-benar berdiri di depan pos.
+    scannedParticipantId: varchar('scanned_participant_id', { length: 50 }).references(() => users.id),
     // Nomor antrean pos, diisi petugas/peserta saat lapor (MR6: "MENGAMBIL
     // NOMOR ANTRIAN (JIKA ADA ANTRIAN)"). Bebas kosong.
     queueNumber: varchar('queue_number', { length: 20 }),

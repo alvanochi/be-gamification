@@ -23,6 +23,10 @@ router.get('/monitoring/missions', adminController.getMissionMonitoring);
 router.get('/monitoring/:groupId', adminController.getGroupDetail);
 router.post('/field-results', adminController.submitFieldResult);
 router.get('/accounts', adminController.listAccounts);
+// Kartu QR peserta untuk dicetak sebelum acara.
+router.get('/participants/qr', adminController.listParticipantQrCards);
+// Petugas pos memindai QR peserta untuk mencatat kedatangan/kepergian.
+router.post('/post/scan', adminController.postScan);
 router.put('/accounts/:userId/role', adminController.setAccountRole);
 router.get('/export/leaderboard', adminController.exportLeaderboard);
 

@@ -1,4 +1,4 @@
-import { eq, and } from 'drizzle-orm';
+import { eq, and, sql } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import { db } from '../../db/index.ts';
 import { missions } from '../../db/schema/missions.ts';
@@ -10,6 +10,19 @@ import { assertWithinEventWindow, assertWithinMissionSession } from '../../utils
 import { assertCheckedIn } from '../../utils/attendance.ts';
 import { getSettings } from '../settings/settings.service.ts';
 import type { CreateMissionInput } from '../../validations/mission.validation.ts';
+
+/**
+ * Yel-yel hanya boleh satu.
+ *
+ * Rangkaian checkpoint menampilkan tepat satu misi yel-yel, jadi menandai misi
+ * baru sebagai yel-yel otomatis melepas penanda dari misi sebelumnya —
+ * daripada membiarkan dua misi bersaing memperebutkan tempat yang sama.
+ */
+const clearOtherYelYel = async (keepId: string) => {
+  await db.update(missions)
+    .set({ isYelYel: false, updatedAt: new Date() })
+    .where(sql`${missions.isYelYel} = TRUE AND ${missions.id} <> ${keepId}`);
+};
 
 export const createMission = async (data: CreateMissionInput) => {
   const missionId = nanoid(16);
@@ -40,12 +53,15 @@ export const createMission = async (data: CreateMissionInput) => {
     pointMin: data.pointMin,
     pointMax: data.pointMax,
     requiresCheckIn: data.requiresCheckIn,
+    isYelYel: data.isYelYel,
     equipment: data.equipment,
     scoringMode: data.scoringMode,
     pointPerUnit: data.pointPerUnit,
     maxUnits: data.maxUnits,
     timeTargetSeconds: data.timeTargetSeconds,
   });
+
+  if (data.isYelYel) await clearOtherYelYel(missionId);
 
   return { id: missionId };
 };
@@ -70,6 +86,8 @@ export const updateMission = async (missionId: string, data: Partial<CreateMissi
       updatedAt: new Date(),
     })
     .where(eq(missions.id, missionId));
+
+  if (data.isYelYel) await clearOtherYelYel(missionId);
 
   return { id: missionId };
 };
@@ -153,19 +171,27 @@ const filterByPrerequisite = async (groupId: string, list: typeof missions.$infe
 };
 
 export const getAvailableMissions = async (groupId: string) => {
+  const settings = await getSettings();
+
+  // Yel-yel berdiri di luar gerbang rilis dan gerbang misi wajib: kelompok
+  // yang melewatinya di checkpoint harus tetap punya tempat untuk mengirim
+  // buktinya sebelum tenggat habis.
+  const [yelYel] = await db.select().from(missions).where(eq(missions.isYelYel, true)).limit(1);
+  const withYelYel = (list: typeof missions.$inferSelect[]) =>
+    yelYel && !list.some(m => m.id === yelYel.id) ? [yelYel, ...list] : list;
+
   // Peserta dikumpulkan dan dibriefing lebih dulu; daftar misi baru terbuka
   // setelah panitia menekan "Munculkan Misi".
-  const settings = await getSettings();
-  if (!settings.missionsReleased) return [];
+  if (!settings.missionsReleased) return withYelYel([]);
 
   const { passed, mandatoryMissions } = await getGatekeeperStatus(groupId);
 
   if (!passed) {
-    return mandatoryMissions;
+    return withYelYel(mandatoryMissions);
   }
 
   const allMissions = await db.select().from(missions);
-  return filterByPrerequisite(groupId, allMissions);
+  return withYelYel(await filterByPrerequisite(groupId, allMissions));
 };
 
 export const assignMission = async (missionId: string, groupId: string, assigneeUserId?: string) => {
@@ -224,11 +250,21 @@ export const checkInMission = async (
   groupId: string,
   userId: string,
   queueNumber?: string,
+  scannedParticipantId?: string,
 ) => {
   await assertCheckedIn(userId);
 
   const mission = await db.select().from(missions).where(eq(missions.id, missionId)).limit(1);
   if (!mission.length) throw ApiError.notFound('Mission not found');
+
+  // Pos berpetugas dicatat lewat pemindaian QR oleh petugas, bukan oleh
+  // peserta dari ponselnya sendiri. `scannedParticipantId` hanya terisi pada
+  // jalur pemindaian, jadi ketiadaannya menandai upaya melapor sendiri.
+  if (mission[0].requiresCheckIn && !scannedParticipantId) {
+    throw ApiError.forbidden(
+      'Kedatangan di pos ini dicatat petugas. Tunjukkan QR-mu untuk dipindai.',
+    );
+  }
 
   assertWithinEventWindow();
   assertWithinMissionSession(mission[0].sessionStart, mission[0].sessionEnd);
@@ -250,13 +286,110 @@ export const checkInMission = async (
     missionId,
     groupId,
     checkedInBy: userId,
+    scannedParticipantId,
     queueNumber,
   });
 
   return { id, checkedInAt: new Date() };
 };
 
-export const checkOutMission = async (missionId: string, groupId: string, userId: string) => {
+/** Jarak dua titik koordinat dalam meter (haversine). */
+const distanceInMeters = (lat1: number, lon1: number, lat2: number, lon2: number) => {
+  const R = 6371e3;
+  const toRad = (d: number) => (d * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+};
+
+/**
+ * Peserta membuktikan sudah berdiri di lokasi misi.
+ *
+ * Untuk misi berpertanyaan yang dipagari koordinat, soalnya baru terbuka
+ * setelah langkah ini berhasil — supaya jawaban tidak bisa disiapkan dari
+ * rumah. Keberhasilannya dicatat sebagai check-in kelompok, jadi ikut terlihat
+ * di layar pemantauan panitia.
+ */
+export const verifyMissionLocation = async (
+  missionId: string,
+  groupId: string,
+  userId: string,
+  coords: { lat: number; lng: number },
+) => {
+  await assertCheckedIn(userId);
+
+  const [mission] = await db.select().from(missions).where(eq(missions.id, missionId)).limit(1);
+  if (!mission) throw ApiError.notFound('Mission not found');
+  if (!mission.geoLat || !mission.geoLng || !mission.geoRadius) {
+    throw ApiError.badRequest('Misi ini tidak memerlukan validasi lokasi');
+  }
+
+  const distance = distanceInMeters(
+    coords.lat,
+    coords.lng,
+    Number(mission.geoLat),
+    Number(mission.geoLng),
+  );
+
+  if (distance > mission.geoRadius) {
+    throw ApiError.badRequest(
+      `Kamu masih ${Math.round(distance)} meter dari lokasi misi. Mendekatlah sampai dalam ${mission.geoRadius} meter.`,
+    );
+  }
+
+  const existing = await getCheckIn(missionId, groupId);
+  if (existing) {
+    return { verified: true, distance: Math.round(distance), alreadyVerified: true };
+  }
+
+  await db.insert(missionCheckins).values({
+    id: nanoid(16),
+    missionId,
+    groupId,
+    checkedInBy: userId,
+    scannedParticipantId: userId,
+  });
+
+  return { verified: true, distance: Math.round(distance), alreadyVerified: false };
+};
+
+/**
+ * Apakah soal misi ini sudah boleh dibuka kelompok tersebut.
+ *
+ * Hanya misi yang dipagari koordinat yang terkunci; sisanya terbuka begitu
+ * misinya terlihat.
+ */
+export const isQuizUnlocked = async (missionId: string, groupId: string) => {
+  const [mission] = await db.select().from(missions).where(eq(missions.id, missionId)).limit(1);
+  if (!mission) throw ApiError.notFound('Mission not found');
+
+  const fenced = Boolean(mission.geoLat && mission.geoLng && mission.geoRadius);
+  if (!fenced) return { unlocked: true, fenced: false };
+
+  const checkIn = await getCheckIn(missionId, groupId);
+  return { unlocked: Boolean(checkIn), fenced: true };
+};
+
+export const checkOutMission = async (
+  missionId: string,
+  groupId: string,
+  userId: string,
+  byOfficer = false,
+) => {
+  const [mission] = await db.select({ requiresCheckIn: missions.requiresCheckIn })
+    .from(missions).where(eq(missions.id, missionId)).limit(1);
+  if (!mission) throw ApiError.notFound('Mission not found');
+
+  // Sama seperti kedatangan: kepergian dari pos berpetugas dicatat petugas.
+  if (mission.requiresCheckIn && !byOfficer) {
+    throw ApiError.forbidden(
+      'Kepergian dari pos ini dicatat petugas. Tunjukkan QR-mu untuk dipindai.',
+    );
+  }
+
   const existing = await getCheckIn(missionId, groupId);
   if (!existing) throw ApiError.badRequest('Kelompok belum check-in di misi ini');
   if (existing.checkedOutAt) throw ApiError.badRequest('Kelompok sudah check-out dari misi ini');

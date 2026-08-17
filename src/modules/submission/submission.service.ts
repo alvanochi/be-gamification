@@ -18,6 +18,7 @@ import { assertCheckedIn } from '../../utils/attendance.ts';
 import { getGatekeeperStatus } from '../mission/mission.service.ts';
 import { gradeAnswers, saveAnswers } from '../mission/question.service.ts';
 import { calculateMissionPoint } from '../../utils/scoring.ts';
+import { calculateYelYelPoint, isYelYelExpired } from '../../utils/yelYel.ts';
 import { getSettings } from '../settings/settings.service.ts';
 import type { SubmitMissionInput } from '../../validations/submission.validation.ts';
 import env from '../../config/env.ts';
@@ -66,15 +67,29 @@ export const getSubmissionsByGroup = async (groupId: string) => {
 export const submitMission = async (groupId: string, userId: string, data: SubmitMissionInput) => {
   await assertCheckedIn(userId);
 
-  // Sama seperti daftar misi: sebelum panitia mengumumkan mulai, tidak ada
-  // yang boleh dikirim — termasuk lewat pemanggilan endpoint langsung.
   const settings = await getSettings();
-  if (!settings.missionsReleased) {
-    throw ApiError.badRequest('Misi belum dibuka panitia. Tunggu pengumuman dimulainya acara.');
-  }
 
   const mission = await db.select().from(missions).where(eq(missions.id, data.missionId)).limit(1);
   if (!mission.length) throw ApiError.notFound('Mission not found');
+
+  // Yel-yel berdiri di luar antrean misi biasa: ia bagian dari rangkaian
+  // checkpoint, dikerjakan sebelum perlombaan dibuka, dan karena itu tidak
+  // tunduk pada gerbang rilis maupun urutan misi wajib. Yang mengikatnya
+  // hanyalah tenggatnya sendiri.
+  const isYelYel = mission[0].isYelYel;
+
+  if (isYelYel) {
+    const [group] = await db.select().from(groups).where(eq(groups.id, groupId)).limit(1);
+    if (group && isYelYelExpired(group.nameSetAt, settings.yelYelDeadlineHours)) {
+      throw ApiError.badRequest('Batas waktu pengumpulan yel-yel sudah lewat.');
+    }
+  }
+
+  // Sama seperti daftar misi: sebelum panitia mengumumkan mulai, tidak ada
+  // yang boleh dikirim — termasuk lewat pemanggilan endpoint langsung.
+  if (!isYelYel && !settings.missionsReleased) {
+    throw ApiError.badRequest('Misi belum dibuka panitia. Tunggu pengumuman dimulainya acara.');
+  }
 
   // BR-04 time box harian dan sesi per-misi dari MR6.
   assertWithinEventWindow();
@@ -82,7 +97,7 @@ export const submitMission = async (groupId: string, userId: string, data: Submi
 
   // BR-02 — gerbang wajib ditegakkan di sini, bukan hanya saat membaca daftar
   // misi. Tanpa ini, memanggil endpoint langsung sudah cukup untuk melewatinya.
-  if (!mission[0].isMandatory) {
+  if (!mission[0].isMandatory && !isYelYel) {
     const { passed } = await getGatekeeperStatus(groupId);
     if (!passed) {
       throw ApiError.badRequest('Selesaikan misi wajib terlebih dahulu sebelum mengerjakan misi lain');
@@ -251,7 +266,16 @@ export const validateSubmission = async (
     const mission = missionRows[0];
     if (!mission) throw ApiError.notFound('Mission not found');
 
-    pointsToAward = calculateMissionPoint(mission, scoring);
+    if (mission.isYelYel) {
+      // Yel-yel tidak dinilai dari konfigurasi misi, melainkan dari kapan
+      // kelompok mengerjakannya: langsung di checkpoint, ditunda, atau
+      // terlambat sama sekali.
+      const [group] = await db.select().from(groups).where(eq(groups.id, submission[0].groupId)).limit(1);
+      const settings = await getSettings();
+      pointsToAward = group ? calculateYelYelPoint(group, settings) : 0;
+    } else {
+      pointsToAward = calculateMissionPoint(mission, scoring);
+    }
   }
 
   await db.transaction(async (tx: any) => {

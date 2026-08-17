@@ -43,6 +43,9 @@ const missionBody = z.object({
     pointMin: z.number().int().min(0).optional(),
     pointMax: z.number().int().min(0).optional(),
     requiresCheckIn: z.boolean().default(false),
+    // Menandai misi ini sebagai yel-yel — satu-satunya misi yang ikut muncul
+    // di rangkaian checkpoint dan punya tenggatnya sendiri.
+    isYelYel: z.boolean().default(false),
     equipment: z.string().optional(),
 
     // Cara penilaian. RANGE memakai pointMin/pointMax, PER_UNIT memakai

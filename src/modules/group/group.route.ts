@@ -16,5 +16,6 @@ router.post('/:groupId/confirm/:targetUserId', groupController.confirmMember);
 router.get('/:groupId/confirmations', groupController.getConfirmations);
 router.get('/:groupId/check-name', groupController.checkNameAvailability);
 router.post('/:groupId/photo', groupController.setPhotoCompleted);
+router.post('/:groupId/yel-yel/skip', groupController.skipYelYel);
 
 export default router;

@@ -68,3 +68,17 @@ export const getConfirmations = catchAsync(async (req: Request, res: Response) =
   const confirmations = await groupService.getConfirmations(groupId);
   response(res, 200, 'Confirmations fetched', confirmations);
 });
+
+/**
+ * Ketua memilih mengerjakan yel-yel belakangan.
+ *
+ * Rangkaian checkpoint langsung berlanjut ke perlombaan; yel-yel tetap bisa
+ * dikirim dari daftar misi sampai tenggatnya habis.
+ */
+export const skipYelYel = catchAsync(async (req: Request, res: Response) => {
+  const result = await groupService.skipYelYel(
+    req.params.groupId as string,
+    req.user?.id as string,
+  );
+  response(res, 200, 'Yel-yel dilewati', result);
+});
