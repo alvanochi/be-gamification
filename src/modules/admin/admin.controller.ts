@@ -15,6 +15,7 @@ import { eq, and, gt, sql } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import * as groupService from '../group/group.service.ts';
 import * as missionService from '../mission/mission.service.ts';
+import { ensureQrToken } from '../user/user.service.ts';
 import { ensureAdmin, ensureSuperAdmin } from '../../utils/roles.ts';
 import { submissions } from '../../db/schema/submissions.ts';
 import { calculateMissionPoint } from '../../utils/scoring.ts';
@@ -621,7 +622,17 @@ export const listParticipantQrCards = catchAsync(async (req: Request, res: Respo
       )
     : rows;
 
-  return response(res, 200, 'Participant QR cards fetched', filtered);
+  // Peserta yang didaftarkan sebelum login-QR ada belum punya token. Selama ini
+  // token itu baru dibuat saat mereka membuka profilnya sendiri — padahal
+  // justru token inilah yang mereka butuhkan untuk bisa masuk. Dibuatkan di
+  // sini supaya tidak ada kartu kosong di lembar cetak.
+  const withToken = await Promise.all(
+    filtered.map(async u =>
+      u.qrToken ? u : { ...u, qrToken: await ensureQrToken(u.id, u.qrToken) },
+    ),
+  );
+
+  return response(res, 200, 'Participant QR cards fetched', withToken);
 });
 
 /**
