@@ -11,10 +11,11 @@ import { sponsors } from '../../db/schema/sponsors.ts';
 import { missions } from '../../db/schema/missions.ts';
 import { groups } from '../../db/schema/groups.ts';
 import { recalculateGroupScore } from '../../utils/groupScore.ts';
-import { eq, and, gt, sql } from 'drizzle-orm';
+import { eq, and, gt, sql, inArray } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import * as groupService from '../group/group.service.ts';
 import * as missionService from '../mission/mission.service.ts';
+import { ensureQrToken } from '../user/user.service.ts';
 import { ensureAdmin, ensureSuperAdmin } from '../../utils/roles.ts';
 import { submissions } from '../../db/schema/submissions.ts';
 import { calculateMissionPoint } from '../../utils/scoring.ts';
@@ -22,14 +23,23 @@ import { getSettings } from '../settings/settings.service.ts';
 import { broadcast, broadcastToGroup } from '../../realtime/hub.ts';
 
 /**
- * Daftar akun untuk pengelolaan peran (khusus Super Admin).
- * Mengembalikan seluruh panitia, plus peserta yang cocok dengan kata kunci
- * pencarian — supaya Super Admin bisa mencari orang yang akan diangkat.
+ * Daftar akun — satu tempat untuk menemukan siapa pun di acara ini.
+ *
+ * Sebelumnya daftar akun dan lembar kartu QR adalah dua halaman berisi orang
+ * yang sama, dan daftar ini baru menampilkan peserta bila dicari. Sekarang
+ * seluruh akun tampil berhalaman, dan hak akses ditegakkan pada tindakannya:
+ * membaca daftar cukup panitia, mengubah peran tetap Super Admin.
  */
 export const listAccounts = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
-    await ensureSuperAdmin(req.user?.id as string);
+    // Daftarnya dibaca panitia lapangan juga — mereka perlu menemukan orang
+    // untuk mencetak ulang kartunya. Yang dibatasi Super Admin adalah
+    // pengubahan peran, bukan pembacaan daftar.
+    await ensureAdmin(req.user?.id as string);
 
     const search = String(req.query.search ?? '').trim().toLowerCase();
+    const roleFilter = String(req.query.role ?? '').trim();
+    const page = Math.max(1, Number(req.query.page) || 1);
+    const perPage = Math.min(200, Math.max(1, Number(req.query.perPage) || 25));
 
     const rows = await db
         .select({
@@ -37,18 +47,127 @@ export const listAccounts = catchAsync(async (req: Request, res: Response, next:
             fullname: users.fullname,
             email: users.email,
             phoneNumber: users.phoneNumber,
+            businessName: users.businessName,
             role: users.role,
             checkInAt: users.checkInAt,
+            groupId: users.groupId,
+            qrToken: users.qrToken,
         })
-        .from(users);
+        .from(users)
+        .orderBy(users.fullname);
 
     const filtered = rows.filter(u => {
-        if (u.role !== 'PARTICIPANT') return true;
-        if (!search) return false;
+        if (roleFilter && u.role !== roleFilter) return false;
+        if (!search) return true;
         return `${u.fullname} ${u.email ?? ''} ${u.phoneNumber ?? ''}`.toLowerCase().includes(search);
     });
 
-    return response(res, 200, 'Accounts fetched', filtered);
+    const start = (page - 1) * perPage;
+
+    // qrToken tidak ikut dikirim di sini. Menelusuri daftar akun tidak boleh
+    // menaruh ratusan kredensial di browser panitia — token baru diambil
+    // lewat endpoint terpisah, hanya untuk orang yang benar-benar dicetak.
+    const items = filtered.slice(start, start + perPage).map(({ qrToken, ...u }) => ({
+        ...u,
+        hasQrToken: Boolean(qrToken),
+    }));
+
+    return response(res, 200, 'Accounts fetched', {
+        page,
+        perPage,
+        total: filtered.length,
+        totalPages: Math.max(1, Math.ceil(filtered.length / perPage)),
+        counts: {
+            all: rows.length,
+            PARTICIPANT: rows.filter(u => u.role === 'PARTICIPANT').length,
+            ADMIN: rows.filter(u => u.role === 'ADMIN').length,
+            SUPER_ADMIN: rows.filter(u => u.role === 'SUPER_ADMIN').length,
+        },
+        items,
+    });
+});
+
+/**
+ * Token QR untuk sekumpulan peserta yang dipilih panitia.
+ *
+ * Dipisahkan dari daftar akun dengan sengaja: token adalah kredensial, dan
+ * membuka halaman daftar tidak boleh menarik kredensial semua orang ke
+ * browser. Di sini panitia sudah menyatakan siapa yang akan dicetak.
+ */
+export const getQrTokensForPrint = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    await ensureAdmin(req.user?.id as string);
+
+    const { userIds } = req.body ?? {};
+    if (!Array.isArray(userIds) || userIds.length === 0) {
+        return next(ApiError.badRequest('Pilih peserta yang akan dicetak terlebih dahulu'));
+    }
+    if (userIds.length > 500) {
+        return next(ApiError.badRequest('Maksimal 500 kartu sekali cetak'));
+    }
+
+    const rows = await db
+        .select({
+            id: users.id,
+            fullname: users.fullname,
+            businessName: users.businessName,
+            role: users.role,
+            qrToken: users.qrToken,
+        })
+        .from(users)
+        .where(inArray(users.id, userIds))
+        .orderBy(users.fullname);
+
+    // Panitia masuk lewat email & nomor telepon, tidak punya kartu QR.
+    const participants = rows.filter(u => u.role === 'PARTICIPANT');
+    const skipped = rows.filter(u => u.role !== 'PARTICIPANT').map(u => u.fullname);
+
+    const cards = await Promise.all(
+        participants.map(async u => ({
+            id: u.id,
+            fullname: u.fullname,
+            businessName: u.businessName,
+            qrToken: await ensureQrToken(u.id, u.qrToken),
+        })),
+    );
+
+    return response(res, 200, 'QR tokens fetched', { cards, skipped });
+});
+
+/**
+ * Mengubah peran beberapa akun sekaligus.
+ *
+ * Mengangkat panitia satu per satu menjelang hari-H memakan waktu, dan
+ * setiap klik adalah satu kesempatan salah pilih orang.
+ */
+export const setAccountRolesBulk = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    const actorId = req.user?.id as string;
+    await ensureSuperAdmin(actorId);
+
+    const { userIds, role } = req.body ?? {};
+    if (!Array.isArray(userIds) || userIds.length === 0) {
+        return next(ApiError.badRequest('Pilih akun terlebih dahulu'));
+    }
+    if (!['PARTICIPANT', 'ADMIN', 'SUPER_ADMIN'].includes(role)) {
+        return next(ApiError.badRequest('Peran tidak dikenali'));
+    }
+
+    // Menurunkan peran diri sendiri bisa membuat acara kehilangan Super Admin
+    // terakhirnya di tengah jalan — disaring, bukan menggagalkan seluruh batch.
+    const targets = userIds.filter((id: string) => !(id === actorId && role !== 'SUPER_ADMIN'));
+    const skippedSelf = targets.length !== userIds.length;
+
+    if (targets.length === 0) {
+        return next(ApiError.badRequest('Anda tidak bisa menurunkan peran akun Anda sendiri'));
+    }
+
+    await db.update(users)
+        .set({ role, updatedAt: new Date() })
+        .where(inArray(users.id, targets));
+
+    return response(res, 200, 'Peran akun diperbarui', {
+        updated: targets.length,
+        skippedSelf,
+    });
 });
 
 export const setAccountRole = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
@@ -621,7 +740,17 @@ export const listParticipantQrCards = catchAsync(async (req: Request, res: Respo
       )
     : rows;
 
-  return response(res, 200, 'Participant QR cards fetched', filtered);
+  // Peserta yang didaftarkan sebelum login-QR ada belum punya token. Selama ini
+  // token itu baru dibuat saat mereka membuka profilnya sendiri — padahal
+  // justru token inilah yang mereka butuhkan untuk bisa masuk. Dibuatkan di
+  // sini supaya tidak ada kartu kosong di lembar cetak.
+  const withToken = await Promise.all(
+    filtered.map(async u =>
+      u.qrToken ? u : { ...u, qrToken: await ensureQrToken(u.id, u.qrToken) },
+    ),
+  );
+
+  return response(res, 200, 'Participant QR cards fetched', withToken);
 });
 
 /**
