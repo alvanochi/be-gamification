@@ -1,4 +1,4 @@
-import { pgTable, varchar, timestamp, integer } from 'drizzle-orm/pg-core';
+import { pgTable, varchar, timestamp, integer, jsonb } from 'drizzle-orm/pg-core';
 import { users } from './users.ts';
 
 export const groups = pgTable('groups', {
@@ -23,6 +23,15 @@ export const groups = pgTable('groups', {
   startedAt: timestamp('started_at', { withTimezone: false }),
   formationPoint: integer('formation_point'),
   nameSetAt: timestamp('name_set_at', { withTimezone: false }), // null until the leader deliberately names the group; the placeholder auto-name at creation doesn't count
+
+  // Kelompok yang memilih mengerjakan yel-yel belakangan. Bukti yang masuk
+  // setelah ini dinilai dengan tarif yang lebih rendah.
+  yelYelSkippedAt: timestamp('yel_yel_skipped_at', { withTimezone: false }),
+
+  // Calon yang tersisa untuk putaran kedua pemilihan ketua. Kosong berarti
+  // seluruh anggota masih boleh dipilih.
+  runoffCandidateIds: jsonb('runoff_candidate_ids').$type<string[] | null>(),
+
   createdAt: timestamp('created_at', { withTimezone: false }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: false }).defaultNow().notNull(),
 });

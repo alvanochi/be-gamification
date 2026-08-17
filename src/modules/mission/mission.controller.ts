@@ -1,4 +1,4 @@
-import { Request, Response } from 'express';
+import { Request, Response, NextFunction } from 'express';
 import * as missionService from './mission.service.ts';
 import * as questionService from './question.service.ts';
 import { ensureSuperAdmin } from '../../utils/roles.ts';
@@ -50,8 +50,48 @@ export const getMissionQuestions = catchAsync(async (req: Request, res: Response
   // jawaban benar — pemeriksaan sepenuhnya dilakukan di server.
   const isPanitia = user?.role === 'ADMIN' || user?.role === 'SUPER_ADMIN';
 
-  const result = await questionService.getQuestions(req.params.missionId as string, isPanitia);
-  response(res, 200, 'Pertanyaan misi', result);
+  const missionId = req.params.missionId as string;
+
+  // Misi berpertanyaan yang dipagari koordinat baru membuka soalnya setelah
+  // kelompok membuktikan berada di lokasi. Panitia tidak ikut dipagari.
+  if (!isPanitia) {
+    const groupId = await requireGroup(userId);
+    const { unlocked, fenced } = await missionService.isQuizUnlocked(missionId, groupId);
+    if (fenced && !unlocked) {
+      return response(res, 200, 'Soal masih terkunci', {
+        locked: true,
+        questions: [],
+      });
+    }
+  }
+
+  const result = await questionService.getQuestions(missionId, isPanitia);
+  response(res, 200, 'Pertanyaan misi', { locked: false, questions: result });
+});
+
+/**
+ * Peserta menekan "Saya sudah di lokasi".
+ *
+ * Koordinat diambil dari perangkat peserta lalu diperiksa di server — jarak
+ * tidak pernah dihitung di sisi klien, supaya tidak bisa dipalsukan dengan
+ * mengubah tampilan.
+ */
+export const verifyLocation = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+  const userId = req.user?.id as string;
+  const groupId = await requireGroup(userId);
+  const { lat, lng } = req.body ?? {};
+
+  if (typeof lat !== 'number' || typeof lng !== 'number') {
+    return next(ApiError.badRequest('Koordinat lokasi tidak terbaca. Izinkan akses lokasi lalu coba lagi.'));
+  }
+
+  const result = await missionService.verifyMissionLocation(
+    req.params.missionId as string,
+    groupId,
+    userId,
+    { lat, lng },
+  );
+  response(res, 200, 'Lokasi terverifikasi', result);
 });
 
 export const getMissions = catchAsync(async (req: Request, res: Response) => {

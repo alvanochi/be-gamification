@@ -28,6 +28,7 @@ router.get('/:missionId/questions', missionController.getMissionQuestions);
 router.put('/:missionId/questions', validate(setQuestionsSchema), missionController.setMissionQuestions);
 
 router.post('/:missionId/assignments', missionController.createAssignment);
+router.post('/:missionId/verify-location', missionController.verifyLocation);
 router.post('/:missionId/check-in', validate(missionCheckInSchema), missionController.checkInMission);
 router.post('/:missionId/check-out', missionController.checkOutMission);
 

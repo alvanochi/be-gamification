@@ -14,6 +14,7 @@ import { recalculateGroupScore } from '../../utils/groupScore.ts';
 import { eq, and, gt, sql } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import * as groupService from '../group/group.service.ts';
+import * as missionService from '../mission/mission.service.ts';
 import { ensureAdmin, ensureSuperAdmin } from '../../utils/roles.ts';
 import { submissions } from '../../db/schema/submissions.ts';
 import { calculateMissionPoint } from '../../utils/scoring.ts';
@@ -447,7 +448,12 @@ export const listGroups = catchAsync(async (req: Request, res: Response, next: N
     await ensureAdmin(req.user?.id as string);
 
     const rows = await db
-        .select({ id: groups.id, name: groups.name, score: groups.score })
+        .select({
+            id: groups.id,
+            name: groups.name,
+            score: groups.score,
+            categoryId: groups.categoryId,
+        })
         .from(groups)
         .orderBy(groups.name);
 
@@ -576,4 +582,100 @@ export const exportLeaderboard = catchAsync(async (req: Request, res: Response, 
     res.header('Content-Type', 'text/csv');
     res.attachment('leaderboard_export.csv');
     return res.send(csv);
+});
+
+/**
+ * Kartu QR peserta untuk dicetak.
+ *
+ * Tanpa ini login lewat QR mengunci dirinya sendiri: kode hanya tergambar di
+ * layar peserta yang sudah masuk, padahal justru kode itulah yang dipakai
+ * untuk masuk. Panitia mencetak dari sini sebelum acara, lalu membagikannya
+ * di meja registrasi.
+ *
+ * qrToken adalah kredensial — hanya panitia yang boleh membacanya, dan hanya
+ * milik peserta.
+ */
+export const listParticipantQrCards = catchAsync(async (req: Request, res: Response) => {
+  await ensureAdmin(req.user?.id as string);
+
+  const search = String(req.query.search ?? '').trim().toLowerCase();
+
+  const rows = await db
+    .select({
+      id: users.id,
+      fullname: users.fullname,
+      email: users.email,
+      phoneNumber: users.phoneNumber,
+      businessName: users.businessName,
+      qrToken: users.qrToken,
+      checkInAt: users.checkInAt,
+      groupId: users.groupId,
+    })
+    .from(users)
+    .where(eq(users.role, 'PARTICIPANT'))
+    .orderBy(users.fullname);
+
+  const filtered = search
+    ? rows.filter(u =>
+        `${u.fullname} ${u.email ?? ''} ${u.phoneNumber ?? ''}`.toLowerCase().includes(search),
+      )
+    : rows;
+
+  return response(res, 200, 'Participant QR cards fetched', filtered);
+});
+
+/**
+ * Petugas pos memindai QR peserta.
+ *
+ * Sebelumnya kedatangan di pos dicatat peserta sendiri dari ponselnya, jadi
+ * kelompok bisa mengaku hadir tanpa benar-benar datang. Sekarang petugaslah
+ * yang memindai: sistem menemukan kelompok peserta itu, lalu mencatat
+ * kedatangan atau kepergian atas nama petugas.
+ */
+export const postScan = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+  const officerId = req.user?.id as string;
+  await ensureAdmin(officerId);
+
+  const { qrToken, missionId, action, queueNumber } = req.body ?? {};
+  if (!qrToken) return next(ApiError.badRequest('qrToken wajib diisi'));
+  if (!missionId) return next(ApiError.badRequest('Pilih pos/misi terlebih dahulu'));
+  if (action !== 'CHECK_IN' && action !== 'CHECK_OUT') {
+    return next(ApiError.badRequest('action harus CHECK_IN atau CHECK_OUT'));
+  }
+
+  const [participant] = await db
+    .select({ id: users.id, fullname: users.fullname, role: users.role, groupId: users.groupId })
+    .from(users)
+    .where(eq(users.qrToken, qrToken))
+    .limit(1);
+
+  if (!participant || participant.role !== 'PARTICIPANT') {
+    return next(ApiError.notFound('QR tidak dikenali atau bukan milik peserta'));
+  }
+  if (!participant.groupId) {
+    return next(ApiError.badRequest(`${participant.fullname} belum tergabung dalam kelompok`));
+  }
+
+  const [mission] = await db.select().from(missions).where(eq(missions.id, missionId)).limit(1);
+  if (!mission) return next(ApiError.notFound('Pos tidak ditemukan'));
+
+  const result =
+    action === 'CHECK_IN'
+      ? await missionService.checkInMission(missionId, participant.groupId, officerId, queueNumber, participant.id)
+      : await missionService.checkOutMission(missionId, participant.groupId, officerId, true);
+
+  const [group] = await db
+    .select({ name: groups.name })
+    .from(groups)
+    .where(eq(groups.id, participant.groupId))
+    .limit(1);
+
+  return response(res, action === 'CHECK_IN' ? 201 : 200, 'Tercatat di pos', {
+    ...result,
+    action,
+    participantName: participant.fullname,
+    groupId: participant.groupId,
+    groupName: group?.name ?? null,
+    missionTitle: mission.title,
+  });
 });

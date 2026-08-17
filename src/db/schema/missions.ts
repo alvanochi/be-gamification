@@ -86,6 +86,11 @@ export const missions = pgTable('missions', {
   // Misi TERSTRUKTUR mewajibkan lapor ke petugas pos lewat check-in online.
   requiresCheckIn: boolean('requires_check_in').default(false).notNull(),
 
+  // Yel-yel: misi tantangan biasa, tetapi satu-satunya yang ikut muncul di
+  // rangkaian checkpoint dan punya tenggatnya sendiri terhitung sejak nama
+  // kelompok tersimpan. Penilaiannya diatur di event_settings, bukan di sini.
+  isYelYel: boolean('is_yel_yel').default(false).notNull(),
+
   // Daftar alat yang disiapkan panitia di pos (kolom PERALATAN di MR6),
   // mis. "1. BUSUR 4 BUAH\n2. ANAK PANAH 20 BUAH".
   equipment: text('equipment'),

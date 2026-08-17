@@ -1,4 +1,4 @@
-import { eq, sql } from 'drizzle-orm';
+import { eq, sql, inArray } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import { db } from '../../db/index.ts';
 import { groups } from '../../db/schema/groups.ts';
@@ -12,6 +12,9 @@ import { broadcastToGroup } from '../../realtime/hub.ts';
 import { scoreEntries } from '../../db/schema/score_entries.ts';
 import { recalculateGroupScore } from '../../utils/groupScore.ts';
 import { calculateFormationPoint, formationSecondsLeft } from '../../utils/formationScore.ts';
+import { yelYelDeadline, yelYelSecondsLeft, isYelYelExpired } from '../../utils/yelYel.ts';
+import { missions } from '../../db/schema/missions.ts';
+import { submissions } from '../../db/schema/submissions.ts';
 import { getSettings } from '../settings/settings.service.ts';
 
 export const autoGroupUser = async (userId: string) => {
@@ -278,6 +281,13 @@ export const recordVote = async (groupId: string, voterId: string, nomineeId: st
   if (!user.length || user[0].groupId !== groupId) throw ApiError.badRequest('Voter must be in this group');
   if (!nominee.length || nominee[0].groupId !== groupId) throw ApiError.badRequest('Nominee must be in this group');
 
+  // Putaran kedua hanya menyisakan calon yang tadi seri di puncak; memilih di
+  // luar mereka akan mengulang kebuntuan yang sama.
+  const runoff = group[0].runoffCandidateIds;
+  if (runoff?.length && !runoff.includes(nomineeId)) {
+    throw ApiError.badRequest('Putaran kedua hanya antara calon yang suaranya seri');
+  }
+
   const groupMembers = await db.select().from(users).where(eq(users.groupId, groupId));
 
   // Get current round. A round only counts as "current/open" if it hasn't
@@ -328,38 +338,53 @@ export const recordVote = async (groupId: string, voterId: string, nomineeId: st
       voteCounts[v.candidateId] = (voteCounts[v.candidateId] || 0) + 1;
     }
 
-    let maxVotes = 0;
-    let winningCandidate = null;
-    let tie = false;
+    // Puncak perolehan bisa dihuni lebih dari satu calon. Dikumpulkan lebih
+    // dulu, baru diputuskan — perbandingan sambil jalan membuat hasilnya
+    // bergantung pada urutan baris.
+    const maxVotes = Math.max(...Object.values(voteCounts));
+    const leaders = Object.keys(voteCounts).filter(c => voteCounts[c] === maxVotes);
 
-    for (const [candidate, count] of Object.entries(voteCounts)) {
-      if (count > maxVotes) {
-        maxVotes = count;
-        winningCandidate = candidate;
-        tie = false;
-      } else if (count === maxVotes) {
-        tie = true;
-      }
-    }
-
-    // Menang begitu ambang tercapai dan tidak seri — tidak perlu menunggu
-    // anggota yang belum memilih.
-    if (!tie && maxVotes >= WINNING_VOTES) {
-      await db.update(groups).set({ leaderId: winningCandidate, updatedAt: new Date() }).where(eq(groups.id, groupId));
+    // Menang begitu ambang tercapai dan hanya satu calon di puncak — tidak
+    // perlu menunggu anggota yang belum memilih.
+    if (leaders.length === 1 && maxVotes >= WINNING_VOTES) {
+      const winningCandidate = leaders[0];
+      await db.update(groups)
+        .set({ leaderId: winningCandidate, runoffCandidateIds: null, updatedAt: new Date() })
+        .where(eq(groups.id, groupId));
       broadcastToGroup(groupId, 'group:leader-elected', { groupId, leaderId: winningCandidate });
       return { status: 'LEADER_ELECTED', leaderId: winningCandidate };
     }
 
     if (everyoneVoted) {
-      // Semua sudah memilih tapi hasilnya seri atau tidak ada yang mencapai
-      // ambang. SRS meminta sistem me-reset dan membuka voting ulang sendiri,
-      // bukan sekadar memberi tahu klien — suara ronde ini dibuang supaya
-      // peserta bisa langsung memilih lagi tanpa menunggu tindakan panitia.
+      // Suara ronde ini dibuang supaya peserta bisa langsung memilih lagi
+      // tanpa menunggu tindakan panitia.
       await db.delete(leaderVotes).where(
         sql`${leaderVotes.groupId} = ${groupId} AND ${leaderVotes.round} = ${currentRound}`,
       );
-      broadcastToGroup(groupId, 'group:revote', { groupId, round: currentRound + 1 });
-      return { status: 'NEEDS_REVOTE', newRound: currentRound + 1 };
+
+      // Dua calon atau lebih seri di puncak: putaran berikutnya dipersempit
+      // ke mereka saja, alih-alih mengulang dari seluruh anggota. Pilihan
+      // yang lebih sedikit jauh lebih mungkin memecah kebuntuan.
+      const isRunoff = leaders.length > 1;
+      await db.update(groups)
+        .set({ runoffCandidateIds: isRunoff ? leaders : null, updatedAt: new Date() })
+        .where(eq(groups.id, groupId));
+
+      const nominees = isRunoff
+        ? await db.select({ id: users.id, fullname: users.fullname })
+            .from(users).where(inArray(users.id, leaders))
+        : [];
+
+      broadcastToGroup(groupId, 'group:revote', {
+        groupId,
+        round: currentRound + 1,
+        runoffCandidates: nominees,
+      });
+      return {
+        status: isRunoff ? 'NEEDS_RUNOFF' : 'NEEDS_REVOTE',
+        newRound: currentRound + 1,
+        runoffCandidates: nominees,
+      };
     }
   }
 
@@ -396,10 +421,69 @@ export const setLeaderManually = async (groupId: string, nomineeId: string) => {
   }
 
   await db.update(groups)
-    .set({ leaderId: nomineeId, updatedAt: new Date() })
+    .set({ leaderId: nomineeId, runoffCandidateIds: null, updatedAt: new Date() })
     .where(eq(groups.id, groupId));
 
+  broadcastToGroup(groupId, 'group:leader-elected', { groupId, leaderId: nomineeId });
   return { groupId, leaderId: nomineeId };
+};
+
+/**
+ * Keadaan yel-yel sebuah kelompok, apa adanya untuk layar peserta.
+ *
+ * Dikembalikan `null` bila panitia belum menandai satu pun misi sebagai
+ * yel-yel — rangkaian checkpoint melompatinya begitu saja.
+ */
+export const getYelYelState = async (
+  group: { id: string; nameSetAt: Date | null; yelYelSkippedAt: Date | null },
+  settings: Awaited<ReturnType<typeof getSettings>>,
+) => {
+  const [mission] = await db.select({ id: missions.id, title: missions.title, description: missions.description })
+    .from(missions).where(eq(missions.isYelYel, true)).limit(1);
+  if (!mission) return null;
+
+  const [submission] = await db.select({ id: submissions.id, status: submissions.status })
+    .from(submissions)
+    .where(sql`${submissions.groupId} = ${group.id} AND ${submissions.missionId} = ${mission.id}`)
+    .limit(1);
+
+  const expired = isYelYelExpired(group.nameSetAt, settings.yelYelDeadlineHours);
+
+  return {
+    missionId: mission.id,
+    title: mission.title,
+    description: mission.description,
+    deadlineAt: yelYelDeadline(group.nameSetAt, settings.yelYelDeadlineHours),
+    secondsLeft: yelYelSecondsLeft(group.nameSetAt, settings.yelYelDeadlineHours),
+    deadlineHours: settings.yelYelDeadlineHours,
+    expired,
+    skipped: group.yelYelSkippedAt !== null,
+    submissionStatus: submission?.status ?? null,
+    // Layar peserta memakai ini untuk memutuskan apakah checkpoint yel-yel
+    // masih perlu ditampilkan.
+    done: submission != null || group.yelYelSkippedAt !== null || expired,
+  };
+};
+
+/**
+ * Kelompok memilih mengerjakan yel-yel belakangan.
+ *
+ * Keputusan ini milik ketua, sama seperti penamaan kelompok, dan hanya bisa
+ * diambil sekali. Bukti tetap boleh dikirim sampai tenggat.
+ */
+export const skipYelYel = async (groupId: string, requesterId: string) => {
+  const [group] = await db.select().from(groups).where(eq(groups.id, groupId)).limit(1);
+  if (!group) throw ApiError.notFound('Group not found');
+  if (group.leaderId !== requesterId) {
+    throw ApiError.forbidden('Hanya ketua kelompok yang bisa melewati yel-yel');
+  }
+  if (group.yelYelSkippedAt) return { skippedAt: group.yelYelSkippedAt };
+
+  const now = new Date();
+  await db.update(groups).set({ yelYelSkippedAt: now, updatedAt: now }).where(eq(groups.id, groupId));
+  broadcastToGroup(groupId, 'group:updated', { groupId, yelYelSkippedAt: now });
+
+  return { skippedAt: now };
 };
 
 export const getGroupDetails = async (groupId: string) => {
@@ -439,5 +523,9 @@ export const getGroupDetails = async (groupId: string) => {
       fullPoint: settings.formationFullPoint,
       latePoint: settings.formationLatePoint,
     },
+    yelYel: await getYelYelState(group[0], settings),
+    // Bila putaran kedua sedang berjalan, layar pemilihan hanya menampilkan
+    // calon-calon ini.
+    runoffCandidateIds: group[0].runoffCandidateIds ?? null,
   };
 };
