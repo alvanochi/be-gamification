@@ -20,6 +20,7 @@ import { gradeAnswers, saveAnswers } from '../mission/question.service.ts';
 import { calculateMissionPoint } from '../../utils/scoring.ts';
 import { calculateYelYelPoint, isYelYelExpired } from '../../utils/yelYel.ts';
 import { getSettings } from '../settings/settings.service.ts';
+import { broadcastToGroup } from '../../realtime/hub.ts';
 import type { SubmitMissionInput } from '../../validations/submission.validation.ts';
 import env from '../../config/env.ts';
 
@@ -307,6 +308,22 @@ export const validateSubmission = async (
         await recalculateGroupScore(tx, submission[0].groupId);
       }
     }
+  });
+
+  // Kabari kelompoknya seketika. Sebelumnya satu-satunya siaran adalah
+  // perubahan klasemen, dan itu pun hanya bila poinnya lebih dari nol —
+  // sehingga penolakan tidak pernah sampai ke peserta, dan mereka menunggu
+  // di depan layar yang tidak berubah.
+  const [mission] = await db.select({ title: missions.title })
+    .from(missions).where(eq(missions.id, submission[0].missionId)).limit(1);
+
+  broadcastToGroup(submission[0].groupId, 'submission:validated', {
+    submissionId,
+    missionId: submission[0].missionId,
+    missionTitle: mission?.title ?? 'Misi',
+    status,
+    point: status === 'APPROVED' ? pointsToAward : null,
+    rejectReason: status === 'REJECTED' ? (rejectReason ?? null) : null,
   });
 };
 

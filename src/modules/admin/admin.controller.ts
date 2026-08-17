@@ -768,7 +768,12 @@ export const postScan = catchAsync(async (req: Request, res: Response, next: Nex
   const { qrToken, missionId, action, queueNumber } = req.body ?? {};
   if (!qrToken) return next(ApiError.badRequest('qrToken wajib diisi'));
   if (!missionId) return next(ApiError.badRequest('Pilih pos/misi terlebih dahulu'));
-  if (action !== 'CHECK_IN' && action !== 'CHECK_OUT') {
+
+  // `action` boleh dikosongkan. Petugas yang menghadapi antrean tidak sempat
+  // menekan tombol mode setiap kali, dan salah mode berarti catatan yang
+  // keliru — jadi sistem yang menyimpulkannya dari keadaan kelompok itu.
+  const explicitAction = action === 'CHECK_IN' || action === 'CHECK_OUT' ? action : null;
+  if (action != null && !explicitAction) {
     return next(ApiError.badRequest('action harus CHECK_IN atau CHECK_OUT'));
   }
 
@@ -788,8 +793,12 @@ export const postScan = catchAsync(async (req: Request, res: Response, next: Nex
   const [mission] = await db.select().from(missions).where(eq(missions.id, missionId)).limit(1);
   if (!mission) return next(ApiError.notFound('Pos tidak ditemukan'));
 
+  const existing = await missionService.getCheckIn(missionId, participant.groupId);
+  const resolvedAction =
+    explicitAction ?? (existing && !existing.checkedOutAt ? 'CHECK_OUT' : 'CHECK_IN');
+
   const result =
-    action === 'CHECK_IN'
+    resolvedAction === 'CHECK_IN'
       ? await missionService.checkInMission(missionId, participant.groupId, officerId, queueNumber, participant.id)
       : await missionService.checkOutMission(missionId, participant.groupId, officerId, true);
 
@@ -799,9 +808,11 @@ export const postScan = catchAsync(async (req: Request, res: Response, next: Nex
     .where(eq(groups.id, participant.groupId))
     .limit(1);
 
-  return response(res, action === 'CHECK_IN' ? 201 : 200, 'Tercatat di pos', {
+  return response(res, resolvedAction === 'CHECK_IN' ? 201 : 200, 'Tercatat di pos', {
     ...result,
-    action,
+    action: resolvedAction,
+    /** Disimpulkan sistem, bukan dipilih petugas. */
+    inferred: explicitAction === null,
     participantName: participant.fullname,
     groupId: participant.groupId,
     groupName: group?.name ?? null,
