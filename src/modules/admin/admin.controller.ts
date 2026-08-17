@@ -9,9 +9,11 @@ import { barterSteps } from '../../db/schema/barter_steps.ts';
 import { scoreEntries } from '../../db/schema/score_entries.ts';
 import { sponsors } from '../../db/schema/sponsors.ts';
 import { missions } from '../../db/schema/missions.ts';
+import { missionCheckins } from '../../db/schema/mission_checkins.ts';
 import { groups } from '../../db/schema/groups.ts';
 import { recalculateGroupScore } from '../../utils/groupScore.ts';
-import { eq, and, gt, sql, inArray } from 'drizzle-orm';
+import { eq, and, gt, sql, inArray, desc } from 'drizzle-orm';
+import { alias } from 'drizzle-orm/pg-core';
 import { nanoid } from 'nanoid';
 import * as groupService from '../group/group.service.ts';
 import * as missionService from '../mission/mission.service.ts';
@@ -817,5 +819,82 @@ export const postScan = catchAsync(async (req: Request, res: Response, next: Nex
     groupId: participant.groupId,
     groupName: group?.name ?? null,
     missionTitle: mission.title,
+  });
+});
+
+/**
+ * Kelompok yang sedang berada di sebuah pos.
+ *
+ * Menyatukan pemindaian dengan penilaian: begitu petugas memindai QR, kelompok
+ * itu muncul di layarnya lengkap dengan keadaan penilaiannya, jadi tidak perlu
+ * pindah halaman lalu mencari nama kelompoknya di daftar berisi puluhan.
+ */
+export const getPostQueue = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+  await ensureAdmin(req.user?.id as string);
+
+  const missionId = req.params.missionId as string;
+  const [mission] = await db.select().from(missions).where(eq(missions.id, missionId)).limit(1);
+  if (!mission) return next(ApiError.notFound('Pos tidak ditemukan'));
+
+  const scannedBy = alias(users, 'scanned_by');
+
+  const rows = await db
+    .select({
+      checkInId: missionCheckins.id,
+      groupId: missionCheckins.groupId,
+      groupName: groups.name,
+      groupScore: groups.score,
+      queueNumber: missionCheckins.queueNumber,
+      checkedInAt: missionCheckins.checkedInAt,
+      checkedOutAt: missionCheckins.checkedOutAt,
+      scannedName: scannedBy.fullname,
+    })
+    .from(missionCheckins)
+    .innerJoin(groups, eq(groups.id, missionCheckins.groupId))
+    .leftJoin(scannedBy, eq(scannedBy.id, missionCheckins.scannedParticipantId))
+    .where(eq(missionCheckins.missionId, missionId))
+    .orderBy(desc(missionCheckins.checkedInAt));
+
+  // Hasil yang sudah tercatat untuk pos ini, supaya petugas tahu kelompok mana
+  // yang masih perlu dinilai.
+  const scored = await db
+    .select({
+      groupId: submissions.groupId,
+      status: submissions.status,
+      awardedPoint: submissions.awardedPoint,
+    })
+    .from(submissions)
+    .where(eq(submissions.missionId, missionId));
+
+  const byGroup = new Map(scored.map(s => [s.groupId, s]));
+
+  const items = rows.map(r => {
+    const result = byGroup.get(r.groupId);
+    return {
+      ...r,
+      // Sudah dinilai, masih menunggu, atau belum tersentuh sama sekali.
+      resultStatus: result?.status ?? null,
+      awardedPoint: result?.awardedPoint ?? null,
+    };
+  });
+
+  return response(res, 200, 'Post queue fetched', {
+    mission: {
+      id: mission.id,
+      title: mission.title,
+      locationName: mission.locationName,
+      proofType: mission.proofType,
+      scoringMode: mission.scoringMode,
+      pointWeight: mission.pointWeight,
+      pointMin: mission.pointMin,
+      pointMax: mission.pointMax,
+      pointPerUnit: mission.pointPerUnit,
+      maxUnits: mission.maxUnits,
+      timeTargetSeconds: mission.timeTargetSeconds,
+    },
+    // Yang masih di dalam pos didahulukan; yang sudah pergi tetap tampil
+    // supaya penilaian yang terlewat masih bisa disusulkan.
+    active: items.filter(i => !i.checkedOutAt),
+    departed: items.filter(i => i.checkedOutAt),
   });
 });

@@ -9,6 +9,7 @@ import leaderboardRoutes from '../modules/leaderboard/leaderboard.route.ts';
 import sponsorRoutes from '../modules/sponsor/sponsor.route.ts';
 import settingsRoutes from '../modules/settings/settings.route.ts';
 import categoryRoutes from '../modules/category/category.route.ts';
+import uploadRoutes from '../modules/upload/upload.route.ts';
 
 import adminRoutes from '../modules/admin/admin.route.ts';
 
@@ -23,6 +24,7 @@ router.use('/leaderboard', leaderboardRoutes);
 router.use('/sponsors', sponsorRoutes);
 router.use('/settings', settingsRoutes);
 router.use('/group-categories', categoryRoutes);
+router.use('/uploads', uploadRoutes);
 router.use('/admin', adminRoutes);
 
 export default router;

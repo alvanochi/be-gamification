@@ -9,16 +9,6 @@ import { users } from '../../db/schema/users.ts';
 import { eq } from 'drizzle-orm';
 import { assertCheckedIn } from '../../utils/attendance.ts';
 
-export const getUploadUrl = catchAsync(async (req: Request, res: Response) => {
-  const { fileName, mimeType } = req.query;
-  if (!fileName || !mimeType) {
-    throw ApiError.badRequest('fileName and mimeType are required query parameters');
-  }
-
-  const result = await submissionService.generatePresignedUrl(fileName as string, mimeType as string);
-  response(res, 200, 'Presigned URL generated', result);
-});
-
 export const getMyGroupSubmissions = catchAsync(async (req: Request, res: Response) => {
   const userId = req.user?.id as string;
   const user = await db.select().from(users).where(eq(users.id, userId)).limit(1);

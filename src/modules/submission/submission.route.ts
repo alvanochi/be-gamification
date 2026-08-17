@@ -8,7 +8,6 @@ const router = Router();
 
 router.use(authenticate);
 
-router.get('/upload-url', submissionController.getUploadUrl);
 router.get('/my-group', submissionController.getMyGroupSubmissions);
 router.get('/pending', submissionController.getPendingSubmissions);
 router.post('/', validate(submitMissionSchema), submissionController.submitMission);

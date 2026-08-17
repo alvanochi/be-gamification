@@ -27,6 +27,7 @@ router.get('/accounts', adminController.listAccounts);
 router.get('/participants/qr', adminController.listParticipantQrCards);
 // Petugas pos memindai QR peserta untuk mencatat kedatangan/kepergian.
 router.post('/post/scan', adminController.postScan);
+router.get('/post/:missionId/queue', adminController.getPostQueue);
 router.put('/accounts/roles', adminController.setAccountRolesBulk);
 router.post('/accounts/qr-tokens', adminController.getQrTokensForPrint);
 router.put('/accounts/:userId/role', adminController.setAccountRole);

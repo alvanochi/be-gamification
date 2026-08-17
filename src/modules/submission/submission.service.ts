@@ -1,5 +1,3 @@
-import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
-import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { eq, and, desc } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import { db } from '../../db/index.ts';
@@ -22,16 +20,6 @@ import { calculateYelYelPoint, isYelYelExpired } from '../../utils/yelYel.ts';
 import { getSettings } from '../settings/settings.service.ts';
 import { broadcastToGroup } from '../../realtime/hub.ts';
 import type { SubmitMissionInput } from '../../validations/submission.validation.ts';
-import env from '../../config/env.ts';
-
-const s3Client = new S3Client({
-  region: 'auto',
-  endpoint: `https://${env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
-  credentials: {
-    accessKeyId: env.R2_ACCESS_KEY_ID || '',
-    secretAccessKey: env.R2_SECRET_ACCESS_KEY || '',
-  },
-});
 
 function getDistanceFromLatLonInM(lat1: number, lon1: number, lat2: number, lon2: number) {
   const R = 6371e3; // Radius of the earth in m
@@ -44,22 +32,6 @@ function getDistanceFromLatLonInM(lat1: number, lon1: number, lat2: number, lon2
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
   return R * c; // Distance in m
 }
-
-export const generatePresignedUrl = async (fileName: string, mimeType: string) => {
-  const fileKey = `uploads/${nanoid(8)}-${fileName}`;
-  const command = new PutObjectCommand({
-    Bucket: env.R2_BUCKET_NAME || 'gamification-bucket',
-    Key: fileKey,
-    ContentType: mimeType,
-  });
-
-  const presignedUrl = await getSignedUrl(s3Client, command, { expiresIn: 3600 });
-  return {
-    uploadUrl: presignedUrl,
-    fileKey,
-    publicUrl: `https://${env.R2_PUBLIC_DOMAIN}/${fileKey}`,
-  };
-};
 
 export const getSubmissionsByGroup = async (groupId: string) => {
   return await db.select().from(submissions).where(eq(submissions.groupId, groupId));
