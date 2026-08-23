@@ -1,7 +1,12 @@
 import type { NextFunction, Request, Response } from 'express';
 import catchAsync from '../../utils/catchAsync.ts';
 import response from '../../utils/response.ts';
-import { verifyUserCredential, findParticipantByQrToken } from '../user/user.service.ts';
+import {
+  verifyUserCredential,
+  findParticipantByQrToken,
+  verifyParticipant,
+  markCheckedIn,
+} from '../user/user.service.ts';
 import ApiError from '../../utils/ApiError.ts';
 import { generateAccessTokenHelper, generateRefreshTokenHelper, verifyRefreshTokenHelper } from '../../utils/token.ts';
 import { addRefreshToken, deleteRefreshToken, verifyAndRefreshToken } from './auth.service.ts';
@@ -19,6 +24,39 @@ export const loginByQrHandler = catchAsync(async (req: Request, res: Response, n
 
   const user = await findParticipantByQrToken(qrToken);
   if (!user) return next(ApiError.unauthorized('QR tidak dikenali atau bukan milik peserta'));
+
+  const accessToken = generateAccessTokenHelper({ id: user.id });
+  const refreshToken = generateRefreshTokenHelper({ id: user.id });
+  await addRefreshToken({ userId: user.id, refreshToken });
+
+  return response(res, 201, `Selamat datang, ${user.fullname}`, { accessToken, refreshToken });
+});
+
+/**
+ * Masuk sebagai peserta: pilih nama, buktikan dengan nomor telepon.
+ *
+ * Peserta didaftarkan panitia, jadi ia tidak tahu email apa yang dipakaikan
+ * untuknya — mencari namanya sendiri jauh lebih mungkin berhasil di tengah
+ * lapangan daripada mengingat alamat surel.
+ *
+ * Kehadiran ditandai di sini. Nomor telepon sudah membuktikan ini benar
+ * dirinya, dan mengantre lagi untuk dipindai panitia hanya memperlambat
+ * pembukaan acara; QR peserta tetap dipakai, tetapi untuk lapor pos.
+ */
+export const loginParticipantHandler = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+  const { userId, phoneNumber } = req.body ?? {};
+  if (!userId || !phoneNumber) {
+    return next(ApiError.badRequest('Pilih namamu lalu isi nomor telepon'));
+  }
+
+  const user = await verifyParticipant(userId, String(phoneNumber).trim());
+  if (!user) {
+    return next(
+      ApiError.unauthorized('Nomor telepon tidak cocok dengan nama itu. Coba lagi, atau tanya panitia.'),
+    );
+  }
+
+  await markCheckedIn(user.id);
 
   const accessToken = generateAccessTokenHelper({ id: user.id });
   const refreshToken = generateRefreshTokenHelper({ id: user.id });

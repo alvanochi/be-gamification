@@ -15,6 +15,7 @@ import { recalculateGroupScore } from '../../utils/groupScore.ts';
 import { eq, and, gt, sql, inArray, desc } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 import { nanoid } from 'nanoid';
+import bcrypt from 'bcrypt';
 import * as groupService from '../group/group.service.ts';
 import * as missionService from '../mission/mission.service.ts';
 import { ensureQrToken } from '../user/user.service.ts';
@@ -220,7 +221,7 @@ export const addManualScore = catchAsync(async (req: Request, res: Response, nex
     const userId = req.user?.id as string;
     await ensureAdmin(userId);
 
-    const { groupId, point, referenceId } = req.body;
+    const { groupId, point, referenceId } = req.body ?? {};
     if (!groupId || point === undefined || point === null) {
         throw ApiError.badRequest('groupId and point are required');
     }
@@ -590,7 +591,7 @@ export const createBanner = catchAsync(async (req: Request, res: Response, next:
     const userId = req.user?.id as string;
     await ensureSuperAdmin(userId);
 
-    const { name, logoUrl, linkUrl, orderNum, isActive } = req.body;
+    const { name, logoUrl, linkUrl, orderNum, isActive } = req.body ?? {};
     if (!name || !logoUrl) throw ApiError.badRequest('name and logoUrl are required');
 
     const [banner] = await db.insert(sponsors).values({
@@ -645,7 +646,7 @@ export const verifyBarter = catchAsync(async (req: Request, res: Response, next:
     await ensureAdmin(userId);
 
     const assignmentId = req.params.assignmentId as string;
-    const { validUntilStep, point } = req.body; // Step number until which it is valid
+    const { validUntilStep, point } = req.body ?? {}; // Step number until which it is valid
 
     if (validUntilStep === undefined || point === undefined) {
         throw ApiError.badRequest('validUntilStep and point are required');
@@ -897,4 +898,159 @@ export const getPostQueue = catchAsync(async (req: Request, res: Response, next:
     active: items.filter(i => !i.checkedOutAt),
     departed: items.filter(i => i.checkedOutAt),
   });
+});
+
+/**
+ * Panitia mendaftarkan peserta baru.
+ *
+ * Peserta tidak mendaftar sendiri: panitia yang memasukkan datanya dari daftar
+ * hadir, lalu mencetak kartu QR-nya. Nomor telepon sekaligus menjadi kata
+ * sandinya — itulah yang diketik peserta di layar masuk.
+ */
+export const createAccount = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+  await ensureAdmin(req.user?.id as string);
+
+  const { fullname, phoneNumber, email, businessName, role } = req.body ?? {};
+
+  if (!fullname || String(fullname).trim().length < 2) {
+    return next(ApiError.badRequest('Nama lengkap wajib diisi'));
+  }
+  if (!phoneNumber || String(phoneNumber).trim().length < 6) {
+    return next(ApiError.badRequest('Nomor telepon wajib diisi'));
+  }
+
+  const wantedRole = role ?? 'PARTICIPANT';
+  if (!['PARTICIPANT', 'ADMIN', 'SUPER_ADMIN'].includes(wantedRole)) {
+    return next(ApiError.badRequest('Peran tidak dikenali'));
+  }
+  // Mengangkat panitia tetap milik Super Admin, meski akunnya dibuat di sini.
+  if (wantedRole !== 'PARTICIPANT') {
+    await ensureSuperAdmin(req.user?.id as string);
+  }
+
+  const phone = String(phoneNumber).trim();
+  const [dupPhone] = await db.select({ id: users.id }).from(users)
+    .where(eq(users.phoneNumber, phone)).limit(1);
+  if (dupPhone) return next(ApiError.conflict('Nomor telepon ini sudah terdaftar'));
+
+  const cleanEmail = email ? String(email).trim().toLowerCase() : null;
+  if (cleanEmail) {
+    const [dupEmail] = await db.select({ id: users.id }).from(users)
+      .where(eq(users.email, cleanEmail)).limit(1);
+    if (dupEmail) return next(ApiError.conflict('Email ini sudah terdaftar'));
+  }
+
+  const id = nanoid(16);
+  // Nomor telepon berperan sebagai kata sandi, disimpan sebagai hash — sama
+  // seperti jalur pendaftaran mandiri.
+  const password = await bcrypt.hash(phone, 10);
+
+  const [created] = await db.insert(users).values({
+    id,
+    fullname: String(fullname).trim(),
+    phoneNumber: phone,
+    email: cleanEmail,
+    businessName: businessName ? String(businessName).trim() : null,
+    role: wantedRole,
+    password,
+    qrToken: nanoid(32),
+  }).returning({ id: users.id, fullname: users.fullname, role: users.role });
+
+  return response(res, 201, `${created.fullname} ditambahkan`, created);
+});
+
+/** Menyunting data akun. Peran diubah lewat jalurnya sendiri. */
+export const updateAccount = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+  await ensureAdmin(req.user?.id as string);
+
+  const targetId = req.params.userId as string;
+  const { fullname, phoneNumber, email, businessName } = req.body ?? {};
+
+  const [target] = await db.select({ id: users.id }).from(users).where(eq(users.id, targetId)).limit(1);
+  if (!target) return next(ApiError.notFound('Akun tidak ditemukan'));
+
+  const patch: Record<string, unknown> = { updatedAt: new Date() };
+
+  if (fullname !== undefined) {
+    if (String(fullname).trim().length < 2) return next(ApiError.badRequest('Nama lengkap wajib diisi'));
+    patch.fullname = String(fullname).trim();
+  }
+
+  if (phoneNumber !== undefined) {
+    const phone = String(phoneNumber).trim();
+    if (phone.length < 6) return next(ApiError.badRequest('Nomor telepon tidak valid'));
+    const [dup] = await db.select({ id: users.id }).from(users)
+      .where(eq(users.phoneNumber, phone)).limit(1);
+    if (dup && dup.id !== targetId) return next(ApiError.conflict('Nomor telepon ini sudah terdaftar'));
+    patch.phoneNumber = phone;
+    // Nomor telepon adalah kata sandinya; mengubah satu tanpa yang lain akan
+    // mengunci pemiliknya di luar akunnya sendiri.
+    patch.password = await bcrypt.hash(phone, 10);
+  }
+
+  if (email !== undefined) {
+    const cleanEmail = email ? String(email).trim().toLowerCase() : null;
+    if (cleanEmail) {
+      const [dup] = await db.select({ id: users.id }).from(users)
+        .where(eq(users.email, cleanEmail)).limit(1);
+      if (dup && dup.id !== targetId) return next(ApiError.conflict('Email ini sudah terdaftar'));
+    }
+    patch.email = cleanEmail;
+  }
+
+  if (businessName !== undefined) {
+    patch.businessName = businessName ? String(businessName).trim() : null;
+  }
+
+  await db.update(users).set(patch).where(eq(users.id, targetId));
+  return response(res, 200, 'Akun diperbarui', { id: targetId });
+});
+
+/**
+ * Menghapus akun.
+ *
+ * Akun yang sudah meninggalkan jejak permainan tidak dihapus — menghapusnya
+ * akan melubangi riwayat penilaian dan melanggar kunci asing. Yang seperti itu
+ * ditolak dengan alasan yang jelas, bukan dibiarkan gagal sebagai galat basis
+ * data.
+ */
+export const deleteAccount = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+  const actorId = req.user?.id as string;
+  await ensureSuperAdmin(actorId);
+
+  const targetId = req.params.userId as string;
+  if (targetId === actorId) {
+    return next(ApiError.badRequest('Anda tidak bisa menghapus akun Anda sendiri'));
+  }
+
+  const [target] = await db.select({ id: users.id, fullname: users.fullname, groupId: users.groupId })
+    .from(users).where(eq(users.id, targetId)).limit(1);
+  if (!target) return next(ApiError.notFound('Akun tidak ditemukan'));
+
+  const [hasSubmission] = await db.select({ id: submissions.id }).from(submissions)
+    .where(eq(submissions.submittedBy, targetId)).limit(1);
+  if (hasSubmission) {
+    return next(ApiError.conflict(
+      `${target.fullname} sudah mengirim bukti misi, jadi akunnya tidak bisa dihapus. Ubah datanya bila keliru.`,
+    ));
+  }
+
+  const [hasScore] = await db.select({ id: scoreEntries.id }).from(scoreEntries)
+    .where(eq(scoreEntries.createdBy, targetId)).limit(1);
+  if (hasScore) {
+    return next(ApiError.conflict(
+      `${target.fullname} tercatat pernah memberi poin, jadi akunnya tidak bisa dihapus.`,
+    ));
+  }
+
+  const [hasCheckIn] = await db.select({ id: missionCheckins.id }).from(missionCheckins)
+    .where(eq(missionCheckins.checkedInBy, targetId)).limit(1);
+  if (hasCheckIn) {
+    return next(ApiError.conflict(
+      `${target.fullname} tercatat di pos, jadi akunnya tidak bisa dihapus.`,
+    ));
+  }
+
+  await db.delete(users).where(eq(users.id, targetId));
+  return response(res, 200, `${target.fullname} dihapus`, null);
 });

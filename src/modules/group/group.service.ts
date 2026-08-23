@@ -344,9 +344,21 @@ export const recordVote = async (groupId: string, voterId: string, nomineeId: st
     const maxVotes = Math.max(...Object.values(voteCounts));
     const leaders = Object.keys(voteCounts).filter(c => voteCounts[c] === maxVotes);
 
-    // Menang begitu ambang tercapai dan hanya satu calon di puncak — tidak
-    // perlu menunggu anggota yang belum memilih.
-    if (leaders.length === 1 && maxVotes >= WINNING_VOTES) {
+    // Menang lebih awal hanya boleh bila kejarannya sudah mustahil. Sebelumnya
+    // siapa pun yang lebih dulu menyentuh ambang langsung diangkat, sehingga di
+    // kelompok berisi enam orang calon pertama yang mencapai tiga suara menang
+    // saat masih ada tiga surat suara di tangan — hasil seri 3–3 yang justru
+    // ingin ditangani tidak pernah sempat terbentuk.
+    const remainingVotes = Math.max(0, groupMembers.length - allVotes.length);
+    const runnerUp = Math.max(
+      0,
+      ...Object.entries(voteCounts)
+        .filter(([c]) => c !== leaders[0])
+        .map(([, n]) => n),
+    );
+    const unassailable = maxVotes > runnerUp + remainingVotes;
+
+    if (leaders.length === 1 && maxVotes >= WINNING_VOTES && unassailable) {
       const winningCandidate = leaders[0];
       await db.update(groups)
         .set({ leaderId: winningCandidate, runoffCandidateIds: null, updatedAt: new Date() })

@@ -1,4 +1,4 @@
-import { eq, asc, inArray } from 'drizzle-orm';
+import { eq, asc, inArray, and, isNull } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import { db } from '../../db/index.ts';
 import { missions } from '../../db/schema/missions.ts';
@@ -45,12 +45,36 @@ export const replaceQuestions = async (missionId: string, questions: QuestionInp
     const existing = await tx
       .select({ id: missionQuestions.id })
       .from(missionQuestions)
-      .where(eq(missionQuestions.missionId, missionId));
+      // Soal yang ditandai terhapus tidak lagi ditampilkan maupun dinilai; ia
+    // hanya bertahan agar jawaban lama tetap punya rujukan.
+    .where(and(eq(missionQuestions.missionId, missionId), isNull(missionQuestions.deletedAt)));
 
     if (existing.length) {
       const ids = existing.map((q: { id: string }) => q.id);
-      await tx.delete(missionQuestionOptions).where(inArray(missionQuestionOptions.questionId, ids));
-      await tx.delete(missionQuestions).where(eq(missionQuestions.missionId, missionId));
+
+      // Pertanyaan yang sudah pernah dijawab tidak boleh benar-benar dibuang:
+      // submission_answers menunjuk padanya, dan riwayat penilaian ikut hilang
+      // bila dipaksa. Dulu ini membuat seluruh daftar soal terkunci begitu satu
+      // kelompok menjawab — menyunting maupun menghapus sama-sama gagal.
+      const answered = await tx
+        .selectDistinct({ questionId: submissionAnswers.questionId })
+        .from(submissionAnswers)
+        .where(inArray(submissionAnswers.questionId, ids));
+
+      const keepIds = answered.map((a: { questionId: string }) => a.questionId);
+      const dropIds = ids.filter((id: string) => !keepIds.includes(id));
+
+      if (keepIds.length) {
+        await tx
+          .update(missionQuestions)
+          .set({ deletedAt: new Date() })
+          .where(inArray(missionQuestions.id, keepIds));
+      }
+
+      if (dropIds.length) {
+        await tx.delete(missionQuestionOptions).where(inArray(missionQuestionOptions.questionId, dropIds));
+        await tx.delete(missionQuestions).where(inArray(missionQuestions.id, dropIds));
+      }
     }
 
     for (const [index, q] of questions.entries()) {
@@ -91,7 +115,9 @@ export const getQuestions = async (missionId: string, includeAnswers = false) =>
   const questions = await db
     .select()
     .from(missionQuestions)
-    .where(eq(missionQuestions.missionId, missionId))
+    // Soal yang ditandai terhapus tidak lagi ditampilkan maupun dinilai; ia
+    // hanya bertahan agar jawaban lama tetap punya rujukan.
+    .where(and(eq(missionQuestions.missionId, missionId), isNull(missionQuestions.deletedAt)))
     .orderBy(asc(missionQuestions.orderNo));
 
   if (!questions.length) return [];
@@ -133,7 +159,9 @@ export const gradeAnswers = async (missionId: string, answers: AnswerInput[]) =>
   const questions = await db
     .select()
     .from(missionQuestions)
-    .where(eq(missionQuestions.missionId, missionId))
+    // Soal yang ditandai terhapus tidak lagi ditampilkan maupun dinilai; ia
+    // hanya bertahan agar jawaban lama tetap punya rujukan.
+    .where(and(eq(missionQuestions.missionId, missionId), isNull(missionQuestions.deletedAt)))
     .orderBy(asc(missionQuestions.orderNo));
 
   if (!questions.length) throw ApiError.badRequest('Misi ini belum punya pertanyaan');

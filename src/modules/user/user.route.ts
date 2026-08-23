@@ -9,6 +9,9 @@ const router = Router();
 
 router.post('/', validate({ body: registerSchema }), userController.createUserHandler);
 
+// Pencarian nama untuk layar masuk peserta — sengaja sebelum authenticate.
+router.get('/search', userController.searchParticipantsHandler);
+
 // FR-01: panitia memindai QR peserta untuk check-in di lapangan.
 router.post('/check-in/qr', authenticate, userController.checkInByQrHandler);
 

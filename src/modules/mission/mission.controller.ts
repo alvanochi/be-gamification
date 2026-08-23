@@ -117,7 +117,9 @@ export const getMissions = catchAsync(async (req: Request, res: Response) => {
 
 export const createAssignment = catchAsync(async (req: Request, res: Response) => {
   const missionId = req.params.missionId as string;
-  const { assigneeUserId } = req.body;
+  // Klien yang tidak mengirim body sama sekali membuat req.body undefined,
+  // dan destructuring-nya melempar sebelum sempat divalidasi.
+  const { assigneeUserId } = req.body ?? {};
   const userId = req.user?.id as string;
   
   const user = await db.select().from(users).where(eq(users.id, userId)).limit(1);
