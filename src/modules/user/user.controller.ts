@@ -2,7 +2,7 @@ import type { Request, Response, NextFunction } from 'express';
 import catchAsync from '../../utils/catchAsync.ts';
 import response from '../../utils/response.ts';
 import ApiError from '../../utils/ApiError.ts';
-import { createUser, getUserById, getProfile, updateProfile, checkEmailExists, checkPhoneExists, checkInByQrToken } from './user.service.ts';
+import { createUser, getUserById, getProfile, updateProfile, checkEmailExists, checkPhoneExists, checkInByQrToken, searchParticipants } from './user.service.ts';
 import { db } from '../../db/index.ts';
 import { users } from '../../db/schema/users.ts';
 import { eq } from 'drizzle-orm';
@@ -87,4 +87,13 @@ export const updateProfileHandler = catchAsync(async (req: Request, res: Respons
   }
 
   return response(res, 200, 'Profile updated successfully', result);
+});
+
+/**
+ * Pencarian nama peserta untuk layar masuk. Terbuka tanpa sesi — peserta belum
+ * punya sesi ketika mencari namanya sendiri.
+ */
+export const searchParticipantsHandler = catchAsync(async (req: Request, res: Response) => {
+  const result = await searchParticipants(String(req.query.q ?? ''));
+  response(res, 200, 'Peserta ditemukan', result);
 });

@@ -1,4 +1,4 @@
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import bcrypt from 'bcrypt';
 import { db } from '../../db/index.ts';
@@ -219,4 +219,72 @@ export const checkInUser = async (userId: string) => {
     if (user && !user.checkInAt) {
         await db.update(users).set({ checkInAt: new Date(), updatedAt: new Date() }).where(eq(users.id, userId));
     }
+};
+
+/**
+ * Pencarian peserta untuk layar masuk.
+ *
+ * Peserta tidak menghafal email yang didaftarkan panitia untuknya, jadi ia
+ * mencari namanya sendiri lalu membuktikan identitasnya dengan nomor telepon.
+ * Karena endpoint ini terbuka, yang dikembalikan hanya nama dan nama usaha —
+ * tidak ada nomor telepon, email, apalagi token QR — dan hanya bila kata
+ * kuncinya cukup spesifik, supaya daftar peserta tidak bisa dipanen utuh.
+ */
+export const searchParticipants = async (keyword: string) => {
+    const q = keyword.trim();
+    if (q.length < 3) return [];
+
+    return await db
+        .select({
+            id: users.id,
+            fullname: users.fullname,
+            businessName: users.businessName,
+        })
+        .from(users)
+        .where(sql`${users.role} = 'PARTICIPANT' AND ${users.fullname} ILIKE ${'%' + q + '%'}`)
+        .orderBy(users.fullname)
+        .limit(10);
+};
+
+/**
+ * Masuk sebagai peserta: nama yang sudah dipilih, dibuktikan nomor telepon.
+ *
+ * Nomor telepon di sini berperan sebagai kata sandi — dibandingkan dengan hash
+ * yang sama seperti jalur masuk panitia, bukan dicocokkan sebagai teks biasa.
+ */
+export const verifyParticipant = async (userId: string, phoneNumber: string) => {
+    const [user] = await db
+        .select({ id: users.id, role: users.role, password: users.password, fullname: users.fullname })
+        .from(users)
+        .where(eq(users.id, userId))
+        .limit(1);
+
+    if (!user || user.role !== 'PARTICIPANT' || !user.password) return null;
+
+    const match = await bcrypt.compare(phoneNumber, user.password);
+    if (!match) return null;
+
+    return { id: user.id, fullname: user.fullname };
+};
+
+/**
+ * Menandai peserta hadir.
+ *
+ * Kehadiran kini tercatat saat peserta masuk, bukan lewat pemindaian panitia
+ * di meja registrasi: nomor teleponnya sudah membuktikan ini benar dirinya,
+ * dan mengantre dua kali untuk hal yang sama hanya memperlambat pembukaan
+ * acara. QR peserta tetap dipakai, tetapi untuk lapor pos.
+ */
+export const markCheckedIn = async (userId: string) => {
+    const [user] = await db
+        .select({ checkInAt: users.checkInAt })
+        .from(users)
+        .where(eq(users.id, userId))
+        .limit(1);
+
+    if (user?.checkInAt) return user.checkInAt;
+
+    const checkInAt = new Date();
+    await db.update(users).set({ checkInAt, updatedAt: new Date() }).where(eq(users.id, userId));
+    return checkInAt;
 };

@@ -23,8 +23,12 @@ export const missionQuestions = pgTable('mission_questions', {
   answerKey: varchar('answer_key', { length: 255 }),
   point: integer('point').default(10).notNull(),
   createdAt: timestamp('created_at', { withTimezone: false }).defaultNow().notNull(),
+  /** Terisi berarti pertanyaan ini disembunyikan; jawaban lamanya tetap ada. */
+  deletedAt: timestamp('deleted_at', { withTimezone: false }),
 });
 
+// Ditandai terhapus, bukan dibuang, ketika sudah pernah dijawab peserta —
+// jawaban lama tetap dibutuhkan sebagai riwayat penilaian.
 export const missionQuestionOptions = pgTable('mission_question_options', {
   id: varchar('id', { length: 50 }).primaryKey(),
   questionId: varchar('question_id', { length: 50 })

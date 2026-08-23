@@ -40,8 +40,15 @@ router.put('/:id', catchAsync(async (req: Request, res: Response) => {
 
 router.delete('/:id', catchAsync(async (req: Request, res: Response) => {
   await ensureSuperAdmin(req.user?.id as string);
-  await categoryService.deleteCategory(req.params.id as string);
-  responseHandler(res, 200, 'Kategori dihapus', null);
+  const result = await categoryService.deleteCategory(req.params.id as string);
+  responseHandler(
+    res,
+    200,
+    result.released > 0
+      ? `Kategori dihapus. ${result.released} kelompok kini tanpa kategori.`
+      : 'Kategori dihapus',
+    result,
+  );
 }));
 
 /** Penempatan manual: panitia memilih sendiri kelompok mana masuk mana. */

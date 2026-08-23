@@ -64,13 +64,29 @@ export const updateCategory = async (
   return { id };
 };
 
+/**
+ * Menghapus kategori, dan melepas kelompok yang ada di dalamnya.
+ *
+ * Menolak penghapusan selama masih ada anggotanya memaksa panitia memindahkan
+ * puluhan kelompok satu per satu hanya untuk membuang kategori yang salah
+ * ketik. Kelompoknya sendiri tidak boleh ikut hilang — kategori hanya label,
+ * bukan pemilik — jadi mereka dilepas menjadi tanpa kategori.
+ */
 export const deleteCategory = async (id: string) => {
-  const [used] = await db.select({ id: groups.id }).from(groups).where(eq(groups.categoryId, id)).limit(1);
-  if (used) {
-    throw ApiError.conflict('Kategori ini masih dipakai kelompok. Pindahkan kelompoknya lebih dulu.');
-  }
+  const [existing] = await db.select().from(groupCategories)
+    .where(eq(groupCategories.id, id)).limit(1);
+  if (!existing) throw ApiError.notFound('Kategori tidak ditemukan');
+
+  const released = await db
+    .update(groups)
+    .set({ categoryId: null, updatedAt: new Date() })
+    .where(eq(groups.categoryId, id))
+    .returning({ id: groups.id });
+
   await db.delete(groupCategories).where(eq(groupCategories.id, id));
   broadcast('categories:changed', {});
+
+  return { released: released.length };
 };
 
 /** Menempatkan kelompok-kelompok tertentu ke satu kategori sekaligus. */
