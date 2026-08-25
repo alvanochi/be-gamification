@@ -20,8 +20,10 @@ export const missionCheckins = pgTable(
     // Peserta yang QR-nya dipindai petugas. Menyimpan jejak siapa dari
     // kelompok itu yang benar-benar berdiri di depan pos.
     scannedParticipantId: varchar('scanned_participant_id', { length: 50 }).references(() => users.id),
-    // Nomor antrean pos, diisi petugas/peserta saat lapor (MR6: "MENGAMBIL
-    // NOMOR ANTRIAN (JIKA ADA ANTRIAN)"). Bebas kosong.
+    // Kolom nomor antrean pos ditinggalkan: pos dilayani berdasarkan urutan
+    // pemindaian QR, jadi nomor yang diketik ulang petugas hanya menambah
+    // langkah tanpa mengubah urutannya. Kolomnya dibiarkan di basis data
+    // supaya data acara sebelumnya tidak ikut hilang.
     queueNumber: varchar('queue_number', { length: 20 }),
     checkedInAt: timestamp('checked_in_at', { withTimezone: false }).defaultNow().notNull(),
     checkedOutAt: timestamp('checked_out_at', { withTimezone: false }),

@@ -155,6 +155,31 @@ export const getUserById = async (id: string) => {
 };
 
 /**
+ * Lapor pos terakhir kelompok peserta.
+ *
+ * Kartu QR peserta dulu hanya bisa mengatakan "sudah check-in" beserta tanggal
+ * lengkapnya — keterangan yang tidak menjawab pertanyaan sebenarnya di
+ * lapangan: pos mana yang barusan dilaporkan, dan apakah kelompok ini sedang
+ * masuk atau sudah pergi.
+ */
+const getLastPostScan = async (groupId: string | null) => {
+    if (!groupId) return null;
+
+    const [row] = (await db.execute(sql`
+        SELECT m.title AS "postName",
+               CASE WHEN c.checked_out_at IS NULL THEN 'CHECK_IN' ELSE 'CHECK_OUT' END AS action,
+               COALESCE(c.checked_out_at, c.checked_in_at) AS "at"
+        FROM mission_checkins c
+        JOIN missions m ON m.id = c.mission_id
+        WHERE c.group_id = ${groupId}
+        ORDER BY COALESCE(c.checked_out_at, c.checked_in_at) DESC
+        LIMIT 1
+    `)).rows as Array<{ postName: string; action: 'CHECK_IN' | 'CHECK_OUT'; at: string }>;
+
+    return row ?? null;
+};
+
+/**
  * Profil diri sendiri — satu-satunya tempat qrToken boleh keluar.
  * `getUserById` (dipakai untuk melihat peserta lain) sengaja tidak
  * mengembalikannya, karena token itu yang dipakai panitia untuk check-in.
@@ -178,7 +203,11 @@ export const getProfile = async (userId: string) => {
 
     if (!user) return null;
 
-    return { ...user, qrToken: await ensureQrToken(user.id, user.qrToken) };
+    return {
+        ...user,
+        qrToken: await ensureQrToken(user.id, user.qrToken),
+        lastPostScan: await getLastPostScan(user.groupId),
+    };
 };
 
 export const updateProfile = async (userId: string, data: UpdateProfileInput) => {

@@ -118,9 +118,3 @@ export const setQuestionsSchema = z.object({
       .max(50),
   }),
 });
-
-export const missionCheckInSchema = z.object({
-  body: z.object({
-    queueNumber: z.string().max(20).optional(),
-  }),
-});

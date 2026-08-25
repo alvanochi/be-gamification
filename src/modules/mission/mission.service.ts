@@ -249,7 +249,6 @@ export const checkInMission = async (
   missionId: string,
   groupId: string,
   userId: string,
-  queueNumber?: string,
   scannedParticipantId?: string,
 ) => {
   await assertCheckedIn(userId);
@@ -287,7 +286,6 @@ export const checkInMission = async (
     groupId,
     checkedInBy: userId,
     scannedParticipantId,
-    queueNumber,
   });
 
   return { id, checkedInAt: new Date() };

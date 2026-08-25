@@ -26,6 +26,9 @@ router.get('/barter/queue', adminController.getBarterQueue);
 router.put('/barter/steps/:stepId/validate', adminController.validateBarterStep);
 router.put('/groups/:groupId/leader', adminController.setGroupLeader);
 router.get('/groups', adminController.listGroups);
+router.post('/groups', adminController.createGroup);
+router.delete('/groups', adminController.deleteGroups);
+router.put('/groups/:groupId/members', adminController.setGroupMembers);
 router.post('/groups/generate', adminController.generateGroups);
 router.get('/monitoring', adminController.getMonitoring);
 router.get('/monitoring/missions', adminController.getMissionMonitoring);
@@ -36,6 +39,7 @@ router.post('/accounts', adminController.createAccount);
 // Rute berjalur tetap harus mendahului yang berparameter, kalau tidak
 // "/accounts/roles" akan tertangkap sebagai userId bernama "roles".
 router.put('/accounts/roles', adminController.setAccountRolesBulk);
+router.delete('/accounts', adminController.deleteAccountsBulk);
 router.post('/accounts/qr-tokens', adminController.getQrTokensForPrint);
 router.put('/accounts/:userId/role', adminController.setAccountRole);
 router.put('/accounts/:userId', adminController.updateAccount);
@@ -48,10 +52,10 @@ router.get('/post/:missionId/queue', adminController.getPostQueue);
 router.get('/export/leaderboard', adminController.exportLeaderboard);
 
 // --- Pertukaran data lewat lembar kerja ---
+// Satu lembar untuk peserta sekaligus kelompoknya: kolom Kelompok pada tiap
+// baris menentukan ke mana peserta itu ditempatkan.
 router.get('/sheets/accounts/template', sheetController.downloadAccountTemplate);
 router.get('/sheets/accounts', sheetController.exportAccounts);
 router.post('/sheets/accounts', sheetUpload.single('file'), sheetController.importAccounts);
-router.get('/sheets/groups', sheetController.exportGroups);
-router.post('/sheets/groups', sheetUpload.single('file'), sheetController.importGroups);
 
 export default router;

@@ -11,6 +11,8 @@ import { sponsors } from '../../db/schema/sponsors.ts';
 import { missions } from '../../db/schema/missions.ts';
 import { missionCheckins } from '../../db/schema/mission_checkins.ts';
 import { groups } from '../../db/schema/groups.ts';
+import { leaderVotes } from '../../db/schema/leader_votes.ts';
+import { memberConfirmations } from '../../db/schema/member_confirmations.ts';
 import { recalculateGroupScore } from '../../utils/groupScore.ts';
 import { eq, and, gt, sql, inArray, desc } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
@@ -26,18 +28,14 @@ import { getSettings } from '../settings/settings.service.ts';
 import { broadcast, broadcastToGroup } from '../../realtime/hub.ts';
 
 /**
- * Daftar akun — satu tempat untuk menemukan siapa pun di acara ini.
+ * Daftar akun & kelompok — satu tempat untuk menemukan siapa pun di acara ini.
  *
- * Sebelumnya daftar akun dan lembar kartu QR adalah dua halaman berisi orang
- * yang sama, dan daftar ini baru menampilkan peserta bila dicari. Sekarang
- * seluruh akun tampil berhalaman, dan hak akses ditegakkan pada tindakannya:
- * membaca daftar cukup panitia, mengubah peran tetap Super Admin.
+ * Master akun adalah pintu ke seluruh identitas acara: nomor telepon merangkap
+ * kata sandi, dan kelompok menentukan ke mana poin jatuh. Karena itu seluruh
+ * jalurnya — membaca maupun mengubah — dikunci untuk Super Admin.
  */
 export const listAccounts = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
-    // Daftarnya dibaca panitia lapangan juga — mereka perlu menemukan orang
-    // untuk mencetak ulang kartunya. Yang dibatasi Super Admin adalah
-    // pengubahan peran, bukan pembacaan daftar.
-    await ensureAdmin(req.user?.id as string);
+    await ensureSuperAdmin(req.user?.id as string);
 
     const search = String(req.query.search ?? '').trim().toLowerCase();
     const roleFilter = String(req.query.role ?? '').trim();
@@ -54,15 +52,21 @@ export const listAccounts = catchAsync(async (req: Request, res: Response, next:
             role: users.role,
             checkInAt: users.checkInAt,
             groupId: users.groupId,
+            // Nama kelompoknya ikut supaya panitia bisa melihat — dan mencari —
+            // pembagian kelompok tanpa berpindah ke daftar lain.
+            groupName: groups.name,
             qrToken: users.qrToken,
         })
         .from(users)
+        .leftJoin(groups, eq(groups.id, users.groupId))
         .orderBy(users.fullname);
 
     const filtered = rows.filter(u => {
         if (roleFilter && u.role !== roleFilter) return false;
         if (!search) return true;
-        return `${u.fullname} ${u.email ?? ''} ${u.phoneNumber ?? ''}`.toLowerCase().includes(search);
+        return `${u.fullname} ${u.email ?? ''} ${u.phoneNumber ?? ''} ${u.groupName ?? ''}`
+            .toLowerCase()
+            .includes(search);
     });
 
     const start = (page - 1) * perPage;
@@ -98,7 +102,7 @@ export const listAccounts = catchAsync(async (req: Request, res: Response, next:
  * browser. Di sini panitia sudah menyatakan siapa yang akan dicetak.
  */
 export const getQrTokensForPrint = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
-    await ensureAdmin(req.user?.id as string);
+    await ensureSuperAdmin(req.user?.id as string);
 
     const { userIds } = req.body ?? {};
     if (!Array.isArray(userIds) || userIds.length === 0) {
@@ -551,7 +555,7 @@ export const getGroupDetail = catchAsync(async (req: Request, res: Response, nex
     `)).rows;
 
     const checkIns = (await db.execute(sql`
-        SELECT c.id, m.title AS "missionTitle", c.queue_number AS "queueNumber",
+        SELECT c.id, m.title AS "missionTitle",
                c.checked_in_at AS "checkedInAt", c.checked_out_at AS "checkedOutAt",
                i.fullname AS "checkedInByName", o.fullname AS "checkedOutByName"
         FROM mission_checkins c
@@ -768,7 +772,7 @@ export const postScan = catchAsync(async (req: Request, res: Response, next: Nex
   const officerId = req.user?.id as string;
   await ensureAdmin(officerId);
 
-  const { qrToken, missionId, action, queueNumber } = req.body ?? {};
+  const { qrToken, missionId, action } = req.body ?? {};
   if (!qrToken) return next(ApiError.badRequest('qrToken wajib diisi'));
   if (!missionId) return next(ApiError.badRequest('Pilih pos/misi terlebih dahulu'));
 
@@ -802,7 +806,7 @@ export const postScan = catchAsync(async (req: Request, res: Response, next: Nex
 
   const result =
     resolvedAction === 'CHECK_IN'
-      ? await missionService.checkInMission(missionId, participant.groupId, officerId, queueNumber, participant.id)
+      ? await missionService.checkInMission(missionId, participant.groupId, officerId, participant.id)
       : await missionService.checkOutMission(missionId, participant.groupId, officerId, true);
 
   const [group] = await db
@@ -845,7 +849,6 @@ export const getPostQueue = catchAsync(async (req: Request, res: Response, next:
       groupId: missionCheckins.groupId,
       groupName: groups.name,
       groupScore: groups.score,
-      queueNumber: missionCheckins.queueNumber,
       checkedInAt: missionCheckins.checkedInAt,
       checkedOutAt: missionCheckins.checkedOutAt,
       scannedName: scannedBy.fullname,
@@ -908,7 +911,7 @@ export const getPostQueue = catchAsync(async (req: Request, res: Response, next:
  * sandinya — itulah yang diketik peserta di layar masuk.
  */
 export const createAccount = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
-  await ensureAdmin(req.user?.id as string);
+  await ensureSuperAdmin(req.user?.id as string);
 
   const { fullname, phoneNumber, email, businessName, role } = req.body ?? {};
 
@@ -922,10 +925,6 @@ export const createAccount = catchAsync(async (req: Request, res: Response, next
   const wantedRole = role ?? 'PARTICIPANT';
   if (!['PARTICIPANT', 'ADMIN', 'SUPER_ADMIN'].includes(wantedRole)) {
     return next(ApiError.badRequest('Peran tidak dikenali'));
-  }
-  // Mengangkat panitia tetap milik Super Admin, meski akunnya dibuat di sini.
-  if (wantedRole !== 'PARTICIPANT') {
-    await ensureSuperAdmin(req.user?.id as string);
   }
 
   const phone = String(phoneNumber).trim();
@@ -961,7 +960,7 @@ export const createAccount = catchAsync(async (req: Request, res: Response, next
 
 /** Menyunting data akun. Peran diubah lewat jalurnya sendiri. */
 export const updateAccount = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
-  await ensureAdmin(req.user?.id as string);
+  await ensureSuperAdmin(req.user?.id as string);
 
   const targetId = req.params.userId as string;
   const { fullname, phoneNumber, email, businessName } = req.body ?? {};
@@ -1007,13 +1006,49 @@ export const updateAccount = catchAsync(async (req: Request, res: Response, next
 });
 
 /**
- * Menghapus akun.
+ * Alasan sebuah akun tidak boleh dihapus, atau null bila boleh.
  *
  * Akun yang sudah meninggalkan jejak permainan tidak dihapus — menghapusnya
  * akan melubangi riwayat penilaian dan melanggar kunci asing. Yang seperti itu
  * ditolak dengan alasan yang jelas, bukan dibiarkan gagal sebagai galat basis
- * data.
+ * data. Dipakai bersama oleh penghapusan satuan maupun massal.
  */
+const findDeleteBlocker = async (userId: string, fullname: string) => {
+  const [hasSubmission] = await db.select({ id: submissions.id }).from(submissions)
+    .where(eq(submissions.submittedBy, userId)).limit(1);
+  if (hasSubmission) {
+    return `${fullname} sudah mengirim bukti misi, jadi akunnya tidak bisa dihapus. Ubah datanya bila keliru.`;
+  }
+
+  const [hasScore] = await db.select({ id: scoreEntries.id }).from(scoreEntries)
+    .where(eq(scoreEntries.createdBy, userId)).limit(1);
+  if (hasScore) return `${fullname} tercatat pernah memberi poin, jadi akunnya tidak bisa dihapus.`;
+
+  const [hasCheckIn] = await db.select({ id: missionCheckins.id }).from(missionCheckins)
+    .where(eq(missionCheckins.checkedInBy, userId)).limit(1);
+  if (hasCheckIn) return `${fullname} tercatat di pos, jadi akunnya tidak bisa dihapus.`;
+
+  return null;
+};
+
+/**
+ * Jejak pilihan & konfirmasi yang tidak bernilai poin — ikut terhapus.
+ *
+ * Tanpa ini penghapusan gagal sebagai galat kunci asing yang tidak bisa
+ * dimengerti panitia, padahal barisnya memang tidak berarti apa-apa lagi.
+ */
+const clearUserTraces = async (userIds: string[]) => {
+  await db.delete(leaderVotes).where(inArray(leaderVotes.voterId, userIds));
+  await db.delete(leaderVotes).where(inArray(leaderVotes.candidateId, userIds));
+  await db.delete(memberConfirmations).where(inArray(memberConfirmations.confirmerId, userIds));
+  await db.delete(memberConfirmations).where(inArray(memberConfirmations.confirmedId, userIds));
+
+  // leaderId & photoBy menunjuk ke users tanpa kunci asing, jadi tidak ikut
+  // terjaga database — dibersihkan di sini supaya tidak menunjuk ke ketiadaan.
+  await db.update(groups).set({ leaderId: null }).where(inArray(groups.leaderId, userIds));
+  await db.update(groups).set({ photoBy: null }).where(inArray(groups.photoBy, userIds));
+};
+
 export const deleteAccount = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
   const actorId = req.user?.id as string;
   await ensureSuperAdmin(actorId);
@@ -1023,34 +1058,170 @@ export const deleteAccount = catchAsync(async (req: Request, res: Response, next
     return next(ApiError.badRequest('Anda tidak bisa menghapus akun Anda sendiri'));
   }
 
-  const [target] = await db.select({ id: users.id, fullname: users.fullname, groupId: users.groupId })
+  const [target] = await db.select({ id: users.id, fullname: users.fullname })
     .from(users).where(eq(users.id, targetId)).limit(1);
   if (!target) return next(ApiError.notFound('Akun tidak ditemukan'));
 
-  const [hasSubmission] = await db.select({ id: submissions.id }).from(submissions)
-    .where(eq(submissions.submittedBy, targetId)).limit(1);
-  if (hasSubmission) {
-    return next(ApiError.conflict(
-      `${target.fullname} sudah mengirim bukti misi, jadi akunnya tidak bisa dihapus. Ubah datanya bila keliru.`,
-    ));
-  }
+  const blocker = await findDeleteBlocker(target.id, target.fullname);
+  if (blocker) return next(ApiError.conflict(blocker));
 
-  const [hasScore] = await db.select({ id: scoreEntries.id }).from(scoreEntries)
-    .where(eq(scoreEntries.createdBy, targetId)).limit(1);
-  if (hasScore) {
-    return next(ApiError.conflict(
-      `${target.fullname} tercatat pernah memberi poin, jadi akunnya tidak bisa dihapus.`,
-    ));
-  }
-
-  const [hasCheckIn] = await db.select({ id: missionCheckins.id }).from(missionCheckins)
-    .where(eq(missionCheckins.checkedInBy, targetId)).limit(1);
-  if (hasCheckIn) {
-    return next(ApiError.conflict(
-      `${target.fullname} tercatat di pos, jadi akunnya tidak bisa dihapus.`,
-    ));
-  }
-
+  await clearUserTraces([targetId]);
   await db.delete(users).where(eq(users.id, targetId));
   return response(res, 200, `${target.fullname} dihapus`, null);
+});
+
+/**
+ * Menghapus beberapa akun sekaligus.
+ *
+ * Salah unggah lembar peserta menghasilkan puluhan baris yang harus dibersihkan;
+ * menghapusnya satu per satu berarti puluhan dialog konfirmasi. Akun yang punya
+ * jejak permainan tetap dilewati — dengan alasannya, bukan diam-diam.
+ */
+export const deleteAccountsBulk = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+  const actorId = req.user?.id as string;
+  await ensureSuperAdmin(actorId);
+
+  const { userIds } = req.body ?? {};
+  if (!Array.isArray(userIds) || userIds.length === 0) {
+    return next(ApiError.badRequest('Pilih akun yang akan dihapus terlebih dahulu'));
+  }
+
+  const targets = await db.select({ id: users.id, fullname: users.fullname })
+    .from(users).where(inArray(users.id, userIds));
+
+  const deletable: string[] = [];
+  const skipped: Array<{ name: string; reason: string }> = [];
+
+  for (const target of targets) {
+    if (target.id === actorId) {
+      skipped.push({ name: target.fullname, reason: 'Akun Anda sendiri' });
+      continue;
+    }
+    const blocker = await findDeleteBlocker(target.id, target.fullname);
+    if (blocker) skipped.push({ name: target.fullname, reason: blocker });
+    else deletable.push(target.id);
+  }
+
+  if (deletable.length) {
+    await clearUserTraces(deletable);
+    await db.delete(users).where(inArray(users.id, deletable));
+  }
+
+  return response(res, 200, `${deletable.length} akun dihapus`, {
+    deleted: deletable.length,
+    skipped,
+  });
+});
+
+/** Memindahkan peserta ke sebuah kelompok. Panitia tidak ikut berkelompok. */
+const placeInGroup = async (userIds: string[], groupId: string | null) => {
+  const participants = await db.select({ id: users.id }).from(users)
+    .where(and(inArray(users.id, userIds), eq(users.role, 'PARTICIPANT')));
+
+  if (!participants.length) return 0;
+
+  await db.update(users)
+    .set({ groupId, updatedAt: new Date() })
+    .where(inArray(users.id, participants.map(p => p.id)));
+
+  return participants.length;
+};
+
+/**
+ * Membuat kelompok, sekaligus mengisinya.
+ *
+ * Panitia menyusun kelompok dari daftar akun yang sedang dilihatnya: pilih
+ * beberapa nama, beri nama kelompoknya, selesai. Tanpa ini pembagian manual
+ * hanya mungkin lewat unggahan lembar kerja.
+ */
+export const createGroup = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+  await ensureSuperAdmin(req.user?.id as string);
+
+  const name = String(req.body?.name ?? '').trim();
+  const memberIds: string[] = Array.isArray(req.body?.memberIds) ? req.body.memberIds : [];
+
+  if (name.length < 2) return next(ApiError.badRequest('Nama kelompok wajib diisi'));
+
+  const [existing] = await db.select({ id: groups.id }).from(groups)
+    .where(sql`LOWER(${groups.name}) = ${name.toLowerCase()}`).limit(1);
+  if (existing) return next(ApiError.conflict(`Kelompok "${name}" sudah ada`));
+
+  const id = nanoid(16);
+  // Hitung mundur pembentukan mulai berjalan begitu kelompoknya ada.
+  await db.insert(groups).values({ id, name, startedAt: new Date() });
+
+  const placed = memberIds.length ? await placeInGroup(memberIds, id) : 0;
+
+  return response(res, 201, `Kelompok "${name}" dibuat dengan ${placed} anggota`, { id, placed });
+});
+
+export const setGroupMembers = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+  await ensureSuperAdmin(req.user?.id as string);
+
+  const groupId = req.params.groupId as string;
+  const { userIds } = req.body ?? {};
+  if (!Array.isArray(userIds) || userIds.length === 0) {
+    return next(ApiError.badRequest('Pilih peserta yang akan dimasukkan terlebih dahulu'));
+  }
+
+  const [group] = await db.select({ id: groups.id, name: groups.name })
+    .from(groups).where(eq(groups.id, groupId)).limit(1);
+  if (!group) return next(ApiError.notFound('Kelompok tidak ditemukan'));
+
+  const placed = await placeInGroup(userIds, groupId);
+  return response(res, 200, `${placed} peserta masuk ke ${group.name}`, { placed });
+});
+
+/**
+ * Membubarkan kelompok.
+ *
+ * Anggotanya tidak ikut terhapus — mereka kembali menjadi peserta tanpa
+ * kelompok, siap dimasukkan ke kelompok lain. Kelompok yang sudah bertanding
+ * (punya bukti misi, poin, atau catatan pos) dipertahankan: membubarkannya
+ * berarti melubangi papan skor.
+ */
+export const deleteGroups = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+  await ensureSuperAdmin(req.user?.id as string);
+
+  const { groupIds } = req.body ?? {};
+  if (!Array.isArray(groupIds) || groupIds.length === 0) {
+    return next(ApiError.badRequest('Pilih kelompok yang akan dibubarkan terlebih dahulu'));
+  }
+
+  const targets = await db.select({ id: groups.id, name: groups.name })
+    .from(groups).where(inArray(groups.id, groupIds));
+
+  const removed: string[] = [];
+  const skipped: Array<{ name: string; reason: string }> = [];
+
+  for (const group of targets) {
+    const [hasSubmission] = await db.select({ id: submissions.id }).from(submissions)
+      .where(eq(submissions.groupId, group.id)).limit(1);
+    const [hasScore] = await db.select({ id: scoreEntries.id }).from(scoreEntries)
+      .where(eq(scoreEntries.groupId, group.id)).limit(1);
+    const [hasCheckIn] = await db.select({ id: missionCheckins.id }).from(missionCheckins)
+      .where(eq(missionCheckins.groupId, group.id)).limit(1);
+    const [hasAssignment] = await db.select({ id: assignments.id }).from(assignments)
+      .where(eq(assignments.groupId, group.id)).limit(1);
+
+    if (hasSubmission || hasScore || hasCheckIn || hasAssignment) {
+      skipped.push({
+        name: group.name,
+        reason: `${group.name} sudah bertanding — riwayat penilaiannya akan ikut hilang.`,
+      });
+      continue;
+    }
+
+    await db.update(users).set({ groupId: null, updatedAt: new Date() })
+      .where(eq(users.groupId, group.id));
+    await db.delete(leaderVotes).where(eq(leaderVotes.groupId, group.id));
+    await db.delete(memberConfirmations).where(eq(memberConfirmations.groupId, group.id));
+    await db.delete(groups).where(eq(groups.id, group.id));
+    removed.push(group.name);
+  }
+
+  return response(res, 200, `${removed.length} kelompok dibubarkan`, {
+    deleted: removed.length,
+    skipped,
+  });
 });

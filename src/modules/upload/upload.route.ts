@@ -43,13 +43,25 @@ const storage = multer.diskStorage({
   },
 });
 
+/**
+ * Sebagian ponsel (dan hampir semua unggahan HEIC/HEIF dari iPhone) mengirim
+ * berkas gambar dengan mimetype `application/octet-stream`. Menolaknya karena
+ * itu berarti foto yang sah ditolak tanpa alasan yang bisa dimengerti
+ * pengunggahnya, jadi ekstensi berkas dipakai sebagai jalur cadangan.
+ */
+const MEDIA_EXTENSIONS =
+  /\.(jpe?g|png|gif|bmp|webp|heic|heif|avif|tiff?|svg|mp4|mov|m4v|webm|avi|mkv|3gp|hevc)$/i;
+
+const isMediaFile = (file: Express.Multer.File) =>
+  /^(image|video)\//.test(file.mimetype) || MEDIA_EXTENSIONS.test(file.originalname);
+
 const upload = multer({
   storage,
   // Video yel-yel dari ponsel bisa besar; 60 MB memberi ruang tanpa membiarkan
   // satu unggahan memenuhi disk server.
   limits: { fileSize: 60 * 1024 * 1024, files: 1 },
   fileFilter: (_req, file, cb) => {
-    if (/^(image|video)\//.test(file.mimetype)) return cb(null, true);
+    if (isMediaFile(file)) return cb(null, true);
     cb(new Error('Hanya foto atau video yang bisa diunggah'));
   },
 });

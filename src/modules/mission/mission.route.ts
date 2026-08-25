@@ -5,7 +5,6 @@ import validate from '../../middlewares/validate.middleware.ts';
 import {
   createMissionSchema,
   updateMissionSchema,
-  missionCheckInSchema,
   setQuestionsSchema,
 } from '../../validations/mission.validation.ts';
 
@@ -29,7 +28,7 @@ router.put('/:missionId/questions', validate(setQuestionsSchema), missionControl
 
 router.post('/:missionId/assignments', missionController.createAssignment);
 router.post('/:missionId/verify-location', missionController.verifyLocation);
-router.post('/:missionId/check-in', validate(missionCheckInSchema), missionController.checkInMission);
+router.post('/:missionId/check-in', missionController.checkInMission);
 router.post('/:missionId/check-out', missionController.checkOutMission);
 
 export default router;

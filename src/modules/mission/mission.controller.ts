@@ -149,13 +149,11 @@ const requireGroup = async (userId: string) => {
 export const checkInMission = catchAsync(async (req: Request, res: Response) => {
   const userId = req.user?.id as string;
   const groupId = await requireGroup(userId);
-  const { queueNumber } = req.body ?? {};
 
   const result = await missionService.checkInMission(
     req.params.missionId as string,
     groupId,
     userId,
-    queueNumber,
   );
   response(res, 201, 'Check-in berhasil', result);
 });
