@@ -1,14 +1,21 @@
-import { eq, and, sql } from 'drizzle-orm';
+import { eq, and, sql, inArray } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import { db } from '../../db/index.ts';
 import { missions } from '../../db/schema/missions.ts';
 import { submissions } from '../../db/schema/submissions.ts';
 import { assignments } from '../../db/schema/assignments.ts';
 import { missionCheckins } from '../../db/schema/mission_checkins.ts';
+import { barterSteps } from '../../db/schema/barter_steps.ts';
 import ApiError from '../../utils/ApiError.ts';
-import { assertWithinEventWindow, assertWithinMissionSession } from '../../utils/eventTime.ts';
+import {
+  assertWithinEventWindow,
+  assertWithinMissionSession,
+  minutesOfDayInEventTz,
+  parseHhMm,
+} from '../../utils/eventTime.ts';
 import { assertCheckedIn } from '../../utils/attendance.ts';
 import { getSettings } from '../settings/settings.service.ts';
+import { replaceQuestions } from './question.service.ts';
 import type { CreateMissionInput } from '../../validations/mission.validation.ts';
 
 /**
@@ -26,6 +33,7 @@ const clearOtherYelYel = async (keepId: string) => {
 
 export const createMission = async (data: CreateMissionInput) => {
   const missionId = nanoid(16);
+  const { questions } = data;
 
   await db.insert(missions).values({
     id: missionId,
@@ -63,6 +71,11 @@ export const createMission = async (data: CreateMissionInput) => {
 
   if (data.isYelYel) await clearOtherYelYel(missionId);
 
+  // Soal kuis disimpan sekalian. Misi kuis tanpa soal tidak bisa dikerjakan
+  // siapa pun, jadi keduanya memang satu keputusan — bukan dua langkah yang
+  // salah satunya bisa terlupa.
+  if (questions?.length) await replaceQuestions(missionId, questions);
+
   return { id: missionId };
 };
 
@@ -78,7 +91,7 @@ export const updateMission = async (missionId: string, data: Partial<CreateMissi
     throw ApiError.badRequest('Misi tidak boleh menjadi prasyarat bagi dirinya sendiri');
   }
 
-  const { openAt, ...rest } = data;
+  const { openAt, questions, ...rest } = data;
   await db.update(missions)
     .set({
       ...rest,
@@ -88,6 +101,7 @@ export const updateMission = async (missionId: string, data: Partial<CreateMissi
     .where(eq(missions.id, missionId));
 
   if (data.isYelYel) await clearOtherYelYel(missionId);
+  if (questions) await replaceQuestions(missionId, questions);
 
   return { id: missionId };
 };
@@ -192,6 +206,197 @@ export const getAvailableMissions = async (groupId: string) => {
 
   const allMissions = await db.select().from(missions);
   return withYelYel(await filterByPrerequisite(groupId, allMissions));
+};
+
+/**
+ * Papan misi peserta — pencarian, penyaringan, pengelompokan, dan pemenggalan
+ * halaman, semuanya dihitung di sini.
+ *
+ * Sebelumnya seluruh daftar dikirim apa adanya lalu disaring di peramban.
+ * Akibatnya pencarian hanya menemukan apa yang kebetulan ada di halaman yang
+ * sedang dibuka, dan hitungan di tiap saringan menghitung halaman itu saja —
+ * padahal pertanyaan peserta selalu tentang seluruh misinya ("mana yang belum
+ * kukerjakan?"), bukan tentang sepuluh baris yang kebetulan tampil.
+ */
+export type MissionBoardStatus = 'BELUM' | 'MENUNGGU' | 'SELESAI';
+
+export interface MissionBoardQuery {
+  search?: string;
+  status?: MissionBoardStatus | 'SEMUA';
+  type?: 'TANTANGAN' | 'BIGGER_BETTER' | 'SOAL_LOKASI' | 'KUIS' | 'SEMUA';
+  /** Hanya misi yang sesinya hampir tutup atau yang menahan misi lain. */
+  urgentOnly?: boolean;
+  page?: number;
+  perPage?: number;
+}
+
+/**
+ * Ambang "hampir tutup".
+ *
+ * Sesi misi di MR6 berdurasi satu sampai tiga jam; satu setengah jam sebelum
+ * tutup masih cukup untuk berpindah lokasi dan mengerjakannya, sementara
+ * jendela yang lebih lebar akan menandai hampir semua misi sebagai mendesak
+ * dan membuat penandanya tidak berarti apa-apa.
+ */
+const URGENT_WINDOW_MINUTES = 90;
+
+/** Label bahasa Indonesia ikut dicari, supaya "tantangan" atau "terstruktur" menemukan misinya. */
+const TYPE_LABEL: Record<string, string> = {
+  TANTANGAN: 'Tantangan',
+  BIGGER_BETTER: 'Bigger Better barter',
+  SOAL_LOKASI: 'Soal Lokasi',
+  KUIS: 'Kuis pertanyaan',
+};
+
+const STATUS_ORDER: MissionBoardStatus[] = ['BELUM', 'MENUNGGU', 'SELESAI'];
+const TYPE_ORDER = ['TANTANGAN', 'BIGGER_BETTER', 'SOAL_LOKASI', 'KUIS'];
+
+export const getMissionBoard = async (groupId: string, query: MissionBoardQuery) => {
+  const available = await getAvailableMissions(groupId);
+
+  const groupSubmissions = await db
+    .select({
+      missionId: submissions.missionId,
+      status: submissions.status,
+      createdAt: submissions.createdAt,
+    })
+    .from(submissions)
+    .where(eq(submissions.groupId, groupId));
+
+  const groupAssignments = await db
+    .select({ id: assignments.id, missionId: assignments.missionId, status: assignments.status })
+    .from(assignments)
+    .where(eq(assignments.groupId, groupId));
+
+  // Rantai barter tidak meninggalkan submission, jadi keadaannya dibaca dari
+  // langkah terakhir yang dikirim kelompok.
+  const assignmentIds = groupAssignments.map(a => a.id);
+  const pendingBarter = assignmentIds.length
+    ? await db
+        .select({ assignmentId: barterSteps.assignmentId })
+        .from(barterSteps)
+        .where(and(inArray(barterSteps.assignmentId, assignmentIds), eq(barterSteps.status, 'PENDING')))
+    : [];
+  const assignmentsWaiting = new Set(pendingBarter.map(b => b.assignmentId));
+
+  const latestSubmission = (missionId: string) =>
+    groupSubmissions
+      .filter(s => s.missionId === missionId)
+      .sort((a, b) => Number(new Date(b.createdAt)) - Number(new Date(a.createdAt)))[0] ?? null;
+
+  const nowMinutes = minutesOfDayInEventTz();
+
+  const rows = available.map(mission => {
+    const assignment = groupAssignments.find(a => a.missionId === mission.id) ?? null;
+    const latest = latestSubmission(mission.id);
+
+    let status: MissionBoardStatus;
+    if (mission.type === 'BIGGER_BETTER') {
+      // Panitia mengakhiri rantai barter — disetujui maupun ditolak, misinya
+      // selesai bagi kelompok ini dan tidak perlu muncul lagi sebagai tugas.
+      if (assignment && (assignment.status === 'ACCEPTED' || assignment.status === 'REJECTED')) {
+        status = 'SELESAI';
+      } else if (assignment && assignmentsWaiting.has(assignment.id)) {
+        status = 'MENUNGGU';
+      } else {
+        status = 'BELUM';
+      }
+    } else if (!latest || latest.status === 'REJECTED') {
+      // Bukti yang ditolak berarti misinya terbuka lagi.
+      status = 'BELUM';
+    } else {
+      status = latest.status === 'APPROVED' ? 'SELESAI' : 'MENUNGGU';
+    }
+
+    const sessionEndMinutes = parseHhMm(mission.sessionEnd);
+    const minutesToSessionEnd = sessionEndMinutes === null ? null : sessionEndMinutes - nowMinutes;
+
+    const urgent =
+      status !== 'SELESAI' &&
+      (mission.isMandatory ||
+        (minutesToSessionEnd !== null &&
+          minutesToSessionEnd >= 0 &&
+          minutesToSessionEnd <= URGENT_WINDOW_MINUTES));
+
+    return {
+      ...mission,
+      groupStatus: status,
+      urgent,
+      minutesToSessionEnd,
+      /** Rantai barter yang sudah ditutup panitia tidak bisa dilanjutkan lagi. */
+      barterClosed: mission.type === 'BIGGER_BETTER' && status === 'SELESAI',
+    };
+  });
+
+  const keyword = (query.search ?? '').trim().toLowerCase();
+  const searched = keyword
+    ? rows.filter(m =>
+        [
+          m.title,
+          m.description,
+          m.locationName ?? '',
+          m.category === 'TERSTRUKTUR' ? 'Terstruktur' : 'Mandiri',
+          TYPE_LABEL[m.type] ?? '',
+        ]
+          .join(' ')
+          .toLowerCase()
+          .includes(keyword),
+      )
+    : rows;
+
+  // Hitungan tiap saringan dihitung atas seluruh hasil pencarian, bukan atas
+  // halaman yang sedang tampil — angka pada tombol saringan barulah berarti
+  // "sebanyak ini yang akan kamu lihat kalau menekannya".
+  const counts = {
+    SEMUA: searched.length,
+    BELUM: searched.filter(m => m.groupStatus === 'BELUM').length,
+    MENUNGGU: searched.filter(m => m.groupStatus === 'MENUNGGU').length,
+    SELESAI: searched.filter(m => m.groupStatus === 'SELESAI').length,
+  };
+
+  const typeCounts = Object.fromEntries(
+    TYPE_ORDER.map(type => [type, searched.filter(m => m.type === type).length]),
+  ) as Record<string, number>;
+
+  const urgentCount = searched.filter(m => m.urgent).length;
+
+  const filtered = searched.filter(m => {
+    if (query.status && query.status !== 'SEMUA' && m.groupStatus !== query.status) return false;
+    if (query.type && query.type !== 'SEMUA' && m.type !== query.type) return false;
+    if (query.urgentOnly && !m.urgent) return false;
+    return true;
+  });
+
+  // Diurutkan mengikuti pengelompokan yang dilihat peserta: belum dikerjakan
+  // lebih dulu, lalu per jenis misi di dalamnya. Dengan begitu satu kelompok
+  // jarang terpotong dua halaman.
+  const sorted = [...filtered].sort((a, b) => {
+    const byStatus =
+      STATUS_ORDER.indexOf(a.groupStatus) - STATUS_ORDER.indexOf(b.groupStatus);
+    if (byStatus !== 0) return byStatus;
+
+    // Yang mendesak naik ke atas kelompoknya.
+    if (a.urgent !== b.urgent) return a.urgent ? -1 : 1;
+
+    const byType = TYPE_ORDER.indexOf(a.type) - TYPE_ORDER.indexOf(b.type);
+    return byType !== 0 ? byType : a.title.localeCompare(b.title, 'id');
+  });
+
+  const perPage = Math.min(100, Math.max(1, query.perPage ?? 10));
+  const totalPages = Math.max(1, Math.ceil(sorted.length / perPage));
+  const page = Math.min(Math.max(1, query.page ?? 1), totalPages);
+
+  return {
+    page,
+    perPage,
+    total: sorted.length,
+    totalPages,
+    counts,
+    typeCounts,
+    urgentCount,
+    urgentWindowMinutes: URGENT_WINDOW_MINUTES,
+    items: sorted.slice((page - 1) * perPage, page * perPage),
+  };
 };
 
 export const assignMission = async (missionId: string, groupId: string, assigneeUserId?: string) => {

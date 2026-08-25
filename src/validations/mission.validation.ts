@@ -1,5 +1,22 @@
 import { z } from 'zod';
 
+/**
+ * Satu pertanyaan misi kuis.
+ *
+ * Dipakai bersama oleh pembuatan misi (soalnya disusun sekalian di sana) dan
+ * endpoint penyuntingan daftar soal — satu bentuk, satu tempat memperbaikinya.
+ */
+const questionBody = z.object({
+  questionText: z.string().min(1),
+  imageUrl: z.string().url().optional(),
+  type: z.enum(['PILIHAN_GANDA', 'ISIAN_SINGKAT']),
+  answerKey: z.string().max(255).optional(),
+  point: z.number().int().min(0).default(10),
+  options: z
+    .array(z.object({ optionText: z.string().min(1).max(500), isCorrect: z.boolean() }))
+    .optional(),
+});
+
 // Bentuk dasar body misi, dipakai createMissionSchema (utuh + aturan silang)
 // dan updateMissionSchema (partial).
 const missionBody = z.object({
@@ -54,6 +71,12 @@ const missionBody = z.object({
     pointPerUnit: z.number().int().min(0).optional(),
     maxUnits: z.number().int().min(1).optional(),
     timeTargetSeconds: z.number().int().min(1).optional(),
+
+    // Soal misi kuis disusun bersamaan dengan misinya. Sebelumnya misi harus
+    // disimpan dulu, lalu panitia mencarinya kembali di daftar untuk membuka
+    // "Kelola Pertanyaan" — dan misi kuis tanpa soal sempat terbit ke peserta
+    // di antara dua langkah itu.
+    questions: z.array(questionBody).max(50).optional(),
 });
 
 export const createMissionSchema = z.object({
@@ -83,7 +106,11 @@ export const createMissionSchema = z.object({
     .refine(
       data => data.scoringMode !== 'RANGE' || (data.pointMin !== undefined && data.pointMax !== undefined),
       { message: 'Penilaian rentang membutuhkan poin minimum dan maksimum', path: ['pointMax'] },
-    ),
+    )
+    .refine(data => data.type !== 'KUIS' || (data.questions?.length ?? 0) > 0, {
+      message: 'Misi kuis membutuhkan minimal satu pertanyaan',
+      path: ['questions'],
+    }),
 });
 
 export type CreateMissionInput = z.infer<typeof createMissionSchema>['body'];
@@ -102,19 +129,6 @@ export const updateMissionSchema = z.object({
 
 export const setQuestionsSchema = z.object({
   body: z.object({
-    questions: z
-      .array(
-        z.object({
-          questionText: z.string().min(1),
-          imageUrl: z.string().url().optional(),
-          type: z.enum(['PILIHAN_GANDA', 'ISIAN_SINGKAT']),
-          answerKey: z.string().max(255).optional(),
-          point: z.number().int().min(0).default(10),
-          options: z
-            .array(z.object({ optionText: z.string().min(1).max(500), isCorrect: z.boolean() }))
-            .optional(),
-        }),
-      )
-      .max(50),
+    questions: z.array(questionBody).max(50),
   }),
 });

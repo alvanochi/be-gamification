@@ -21,7 +21,8 @@ router.get('/banners', adminController.getBanners);
 router.post('/banners', adminController.createBanner);
 router.put('/banners/:id', adminController.updateBanner);
 router.delete('/banners/:id', adminController.deleteBanner);
-router.post('/barter/:assignmentId/verify', adminController.verifyBarter);
+// "Akhiri": menutup rantai barter satu kelompok dengan nilai akhir.
+router.post('/barter/:assignmentId/finish', adminController.finishBarter);
 router.get('/barter/queue', adminController.getBarterQueue);
 router.put('/barter/steps/:stepId/validate', adminController.validateBarterStep);
 router.put('/groups/:groupId/leader', adminController.setGroupLeader);

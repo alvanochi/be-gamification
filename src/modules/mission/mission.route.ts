@@ -17,6 +17,7 @@ router.get('/', missionController.getMissions);
 
 // Rute statis didaftarkan sebelum rute ber-parameter agar "my-assignments" dan
 // "my-checkins" tidak pernah tertangkap sebagai :missionId.
+router.get('/board', missionController.getMissionBoard);
 router.get('/my-assignments', missionController.getMyAssignments);
 router.get('/my-checkins', missionController.getMyCheckIns);
 

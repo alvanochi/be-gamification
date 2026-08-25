@@ -115,6 +115,28 @@ export const getMissions = catchAsync(async (req: Request, res: Response) => {
   response(res, 200, 'Missions fetched successfully', result);
 });
 
+/**
+ * Papan misi peserta: dicari, disaring, dikelompokkan, dan dipenggal di server.
+ *
+ * Panitia tidak memakai endpoint ini — mereka membaca /missions yang polos,
+ * karena layar kelola misi butuh seluruh daftarnya tanpa gerbang kelompok.
+ */
+export const getMissionBoard = catchAsync(async (req: Request, res: Response) => {
+  const userId = req.user?.id as string;
+  const groupId = await requireGroup(userId);
+
+  const result = await missionService.getMissionBoard(groupId, {
+    search: req.query.search ? String(req.query.search) : undefined,
+    status: req.query.status as any,
+    type: req.query.type as any,
+    urgentOnly: req.query.urgent === '1' || req.query.urgent === 'true',
+    page: Number(req.query.page) || 1,
+    perPage: Number(req.query.perPage) || 10,
+  });
+
+  response(res, 200, 'Mission board fetched', result);
+});
+
 export const createAssignment = catchAsync(async (req: Request, res: Response) => {
   const missionId = req.params.missionId as string;
   // Klien yang tidak mengirim body sama sekali membuat req.body undefined,

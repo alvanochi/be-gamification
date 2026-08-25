@@ -14,7 +14,7 @@ import { groups } from '../../db/schema/groups.ts';
 import { leaderVotes } from '../../db/schema/leader_votes.ts';
 import { memberConfirmations } from '../../db/schema/member_confirmations.ts';
 import { recalculateGroupScore } from '../../utils/groupScore.ts';
-import { eq, and, gt, sql, inArray, desc } from 'drizzle-orm';
+import { eq, and, sql, inArray, desc } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 import { nanoid } from 'nanoid';
 import bcrypt from 'bcrypt';
@@ -322,7 +322,12 @@ export const getBarterQueue = catchAsync(async (req: Request, res: Response, nex
     const rows = (await db.execute(sql`
         SELECT b.id, b.step_no AS "stepNo", b.item_from AS "itemFrom", b.item_to AS "itemTo",
                b.partner_name AS "partnerName", b.video_url AS "mediaUrl", b.created_at AS "createdAt",
-               g.id AS "groupId", g.name AS "groupName", m.title AS "missionTitle"
+               g.id AS "groupId", g.name AS "groupName", m.title AS "missionTitle",
+               -- Assignment ikut dikirim karena "Akhiri" menutup seluruh rantai
+               -- kelompok itu, bukan satu pertukaran yang sedang dilihat.
+               a.id AS "assignmentId",
+               (SELECT COUNT(*)::int FROM barter_steps s
+                  WHERE s.assignment_id = a.id AND s.status = 'APPROVED') AS "approvedSteps"
         FROM barter_steps b
         JOIN assignments a ON a.id = b.assignment_id
         JOIN groups g      ON g.id = a.group_id
@@ -338,6 +343,11 @@ export const getBarterQueue = catchAsync(async (req: Request, res: Response, nex
  * Validasi satu pertukaran. Setiap pertukaran yang disetujui bernilai poin
  * tetap yang bisa diatur panitia — pemenangnya adalah kelompok dengan
  * pertukaran sah terbanyak.
+ *
+ * Penolakan menutup rantainya. Dulu kelompok dibiarkan memperbaiki lalu
+ * mengirim ulang, tetapi barter berlangsung di lapangan dengan barang yang
+ * sudah berpindah tangan — tidak ada yang bisa "diperbaiki", dan misinya hanya
+ * menggantung di daftar mereka sampai acara usai.
  */
 export const validateBarterStep = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const userId = req.user?.id as string;
@@ -371,6 +381,12 @@ export const validateBarterStep = catchAsync(async (req: Request, res: Response,
             updatedAt: new Date(),
         }).where(eq(barterSteps.id, stepId));
 
+        if (status === 'REJECTED') {
+            await tx.update(assignments)
+                .set({ status: 'REJECTED', rejectReason: rejectReason ?? null, updatedAt: new Date() })
+                .where(eq(assignments.id, assignment.id));
+        }
+
         if (point > 0) {
             await tx.insert(scoreEntries).values({
                 id: nanoid(16),
@@ -384,7 +400,13 @@ export const validateBarterStep = catchAsync(async (req: Request, res: Response,
         }
     });
 
-    broadcastToGroup(assignment.groupId, 'barter:validated', { stepId, status, point });
+    broadcastToGroup(assignment.groupId, 'barter:validated', {
+        stepId,
+        status,
+        point,
+        /** Rantai ditutup: misi barternya pindah ke bagian selesai di layar peserta. */
+        closed: status === 'REJECTED',
+    });
     broadcast('leaderboard:changed', { groupId: assignment.groupId });
 
     return response(
@@ -392,7 +414,7 @@ export const validateBarterStep = catchAsync(async (req: Request, res: Response,
         200,
         status === 'APPROVED'
             ? `Pertukaran disetujui — ${point} poin untuk kelompok ini`
-            : 'Pertukaran ditolak',
+            : 'Pertukaran ditolak — rantai barter kelompok ini ditutup',
         { stepId, status, point },
     );
 });
@@ -645,45 +667,75 @@ export const deleteBanner = catchAsync(async (req: Request, res: Response, next:
     return response(res, 200, 'Banner deleted', null);
 });
 
-export const verifyBarter = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+/**
+ * Mengakhiri rantai barter sebuah kelompok.
+ *
+ * Bigger Better tidak punya garis akhir alami: kelompok bisa terus menukar
+ * sampai waktu habis. Panitialah yang menutupnya — memberi nilai akhir atas
+ * keseluruhan rantai, lalu misinya berhenti muncul sebagai tugas di layar
+ * kelompok itu.
+ */
+export const finishBarter = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const userId = req.user?.id as string;
     await ensureAdmin(userId);
 
     const assignmentId = req.params.assignmentId as string;
-    const { validUntilStep, point } = req.body ?? {}; // Step number until which it is valid
+    const point = Number(req.body?.point);
 
-    if (validUntilStep === undefined || point === undefined) {
-        throw ApiError.badRequest('validUntilStep and point are required');
+    if (!Number.isInteger(point) || point < 0) {
+        return next(ApiError.badRequest('Nilai akhir harus bilangan bulat tidak negatif'));
     }
 
-    const assignment = await db.select().from(assignments).where(eq(assignments.id, assignmentId)).limit(1);
-    if (!assignment.length) throw ApiError.notFound('Assignment not found');
+    const [assignment] = await db.select().from(assignments)
+        .where(eq(assignments.id, assignmentId)).limit(1);
+    if (!assignment) return next(ApiError.notFound('Rantai barter tidak ditemukan'));
+    if (assignment.status === 'ACCEPTED' || assignment.status === 'REJECTED') {
+        return next(ApiError.badRequest('Rantai barter kelompok ini sudah diakhiri'));
+    }
 
     await db.transaction(async (tx: any) => {
-        // Invalidate steps > validUntilStep
+        // Pertukaran yang masih menunggu ikut ditutup: penilaiannya sudah
+        // terwakili oleh nilai akhir, dan meninggalkannya menggantung berarti
+        // antrean validasi menyimpan baris yang tidak bisa ditindaklanjuti.
         await tx.update(barterSteps)
-            .set({ isValid: false, updatedAt: new Date() })
-            .where(and(eq(barterSteps.assignmentId, assignmentId), gt(barterSteps.stepNo, validUntilStep)));
+            .set({
+                status: 'APPROVED',
+                awardedPoint: 0,
+                validatedBy: userId,
+                validatedAt: new Date(),
+                updatedAt: new Date(),
+            })
+            .where(and(eq(barterSteps.assignmentId, assignmentId), eq(barterSteps.status, 'PENDING')));
 
-        // Update assignment status
         await tx.update(assignments)
             .set({ status: 'ACCEPTED', updatedAt: new Date() })
             .where(eq(assignments.id, assignmentId));
 
-        // Add points to score_entries
-        await tx.insert(scoreEntries).values({
-            id: nanoid(16),
-            groupId: assignment[0].groupId,
-            source: 'BARTER',
-            referenceId: assignmentId,
-            point,
-            createdBy: userId,
-        });
-
-        await recalculateGroupScore(tx, assignment[0].groupId);
+        if (point > 0) {
+            await tx.insert(scoreEntries).values({
+                id: nanoid(16),
+                groupId: assignment.groupId,
+                source: 'BARTER',
+                referenceId: assignmentId,
+                point,
+                createdBy: userId,
+            });
+            await recalculateGroupScore(tx, assignment.groupId);
+        }
     });
 
-    return response(res, 200, 'Barter verified', null);
+    broadcastToGroup(assignment.groupId, 'barter:validated', {
+        assignmentId,
+        status: 'FINISHED',
+        point,
+        closed: true,
+    });
+    broadcast('leaderboard:changed', { groupId: assignment.groupId });
+
+    return response(res, 200, `Rantai barter diakhiri — nilai akhir ${point} poin`, {
+        assignmentId,
+        point,
+    });
 });
 
 export const exportLeaderboard = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
@@ -814,6 +866,19 @@ export const postScan = catchAsync(async (req: Request, res: Response, next: Nex
     .from(groups)
     .where(eq(groups.id, participant.groupId))
     .limit(1);
+
+  // Yang dipindai petugas hanya satu orang, tetapi yang tercatat adalah
+  // kelompoknya. Tanpa siaran ini, anggota lain — dan bahkan pemilik QR-nya
+  // sendiri, yang layarnya sedang dipegang petugas — tidak pernah tahu
+  // kedatangannya sudah masuk sistem.
+  broadcastToGroup(participant.groupId, 'post:scanned', {
+    action: resolvedAction,
+    missionId,
+    postName: mission.title,
+    participantName: participant.fullname,
+    groupName: group?.name ?? null,
+    at: new Date().toISOString(),
+  });
 
   return response(res, resolvedAction === 'CHECK_IN' ? 201 : 200, 'Tercatat di pos', {
     ...result,

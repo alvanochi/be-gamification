@@ -46,6 +46,18 @@ export const getPendingSubmissions = catchAsync(async (req: Request, res: Respon
   response(res, 200, 'Pending submissions fetched', result);
 });
 
+/** Lencana angka di navigasi panel — dibaca setiap halaman panitia. */
+export const getPendingCounts = catchAsync(async (req: Request, res: Response) => {
+  const userId = req.user?.id as string;
+  const user = await db.select().from(users).where(eq(users.id, userId)).limit(1);
+  if (!user.length || (user[0].role !== 'ADMIN' && user[0].role !== 'SUPER_ADMIN')) {
+    throw ApiError.forbidden('Only ADMIN or SUPER_ADMIN can view the validation queue');
+  }
+
+  const result = await submissionService.getPendingCounts();
+  response(res, 200, 'Pending counts fetched', result);
+});
+
 export const validateSubmission = catchAsync(async (req: Request, res: Response) => {
   const submissionId = req.params.submissionId as string;
   const validatorId = req.user?.id as string;

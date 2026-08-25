@@ -1,4 +1,4 @@
-import { eq, and, desc } from 'drizzle-orm';
+import { eq, and, desc, sql } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import { db } from '../../db/index.ts';
 import { submissions } from '../../db/schema/submissions.ts';
@@ -203,6 +203,14 @@ export const getPendingSubmissions = async () => {
       // (misi berentang) dan bukti seperti apa yang seharusnya dikirim peserta.
       pointMin: missions.pointMin,
       pointMax: missions.pointMax,
+      // Cara penilaian ikut dikirim. Tanpa ini antrean validasi tidak tahu
+      // misinya dinilai per satuan atau per waktu, sehingga tidak menampilkan
+      // isian yang diperlukan — lalu server menolak persetujuannya dengan
+      // "Mohon isi jumlah hasil…" yang tidak bisa dipenuhi panitia dari layar.
+      scoringMode: missions.scoringMode,
+      pointPerUnit: missions.pointPerUnit,
+      maxUnits: missions.maxUnits,
+      timeTargetSeconds: missions.timeTargetSeconds,
       proofType: missions.proofType,
       missionCategory: missions.category,
       locationName: missions.locationName,
@@ -217,6 +225,27 @@ export const getPendingSubmissions = async () => {
     .innerJoin(users, eq(submissions.submittedBy, users.id))
     .where(eq(submissions.status, 'PENDING'))
     .orderBy(submissions.createdAt);
+};
+
+/**
+ * Berapa banyak yang menunggu panitia.
+ *
+ * Dipakai lencana angka di navigasi panel: tanpa itu panitia harus membuka
+ * halaman validasi untuk tahu apakah ada yang perlu dikerjakan, dan bukti yang
+ * masuk saat mereka sedang di layar lain tidak terlihat sama sekali.
+ */
+export const getPendingCounts = async () => {
+  const [{ submissionCount, barterCount }] = (await db.execute(sql`
+    SELECT
+      (SELECT COUNT(*) FROM submissions WHERE status = 'PENDING')::int  AS "submissionCount",
+      (SELECT COUNT(*) FROM barter_steps WHERE status = 'PENDING')::int AS "barterCount"
+  `)).rows as Array<{ submissionCount: number; barterCount: number }>;
+
+  return {
+    submissions: Number(submissionCount),
+    barterSteps: Number(barterCount),
+    total: Number(submissionCount) + Number(barterCount),
+  };
 };
 
 export const validateSubmission = async (
@@ -325,6 +354,12 @@ export const submitBarterStep = async (groupId: string, data: any) => {
   if (!assignment.length) throw ApiError.notFound('Assignment not found');
   if (assignment[0].groupId !== groupId) {
     throw ApiError.forbidden('Assignment ini bukan milik kelompok Anda');
+  }
+
+  // Rantai yang sudah ditutup panitia — diakhiri dengan nilai akhir, atau
+  // dihentikan karena pertukarannya ditolak — tidak menerima langkah baru.
+  if (assignment[0].status === 'ACCEPTED' || assignment[0].status === 'REJECTED') {
+    throw ApiError.badRequest('Rantai barter kelompok ini sudah diakhiri panitia');
   }
 
   const existingStep = await db.select().from(barterSteps).where(
