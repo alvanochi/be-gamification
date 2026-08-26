@@ -6,7 +6,22 @@ import { UPLOAD_DIR } from './modules/upload/upload.route.ts';
 
 const app = express();
 
-app.use(cors({ origin: true, credentials: true }));
+app.use(
+  cors({
+    origin: true,
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowedHeaders: [
+      'Content-Type',
+      'Authorization',
+      'ngrok-skip-browser-warning',
+      'x-requested-with',
+      'Accept',
+      'Origin',
+    ],
+  }),
+);
+
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use('/api', routes);
@@ -20,7 +35,11 @@ app.use(
     immutable: true,
     // Berkas berasal dari unggahan peserta — jangan biarkan peramban menebak
     // tipenya lalu menjalankan isinya.
-    setHeaders: res => res.setHeader('X-Content-Type-Options', 'nosniff'),
+    setHeaders: res => {
+      res.setHeader('Access-Control-Allow-Origin', '*');
+      res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+    },
   }),
 );
 
