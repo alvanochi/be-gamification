@@ -6,7 +6,45 @@ import { UPLOAD_DIR } from './modules/upload/upload.route.ts';
 
 const app = express();
 
-app.use(cors({ origin: true, credentials: true }));
+// 1. Fallback & Preflight Middleware: memastikan header CORS selalu terpasang
+// untuk semua respon, termasuk preflight OPTIONS, rute 404, dan penanganan error.
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+  if (origin) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+  }
+  res.setHeader('Access-Control-Allow-Credentials', 'true');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, PUT, PATCH, POST, DELETE, OPTIONS');
+  const requestedHeaders = req.headers['access-control-request-headers'];
+  if (requestedHeaders) {
+    res.setHeader('Access-Control-Allow-Headers', requestedHeaders);
+  } else {
+    res.setHeader(
+      'Access-Control-Allow-Headers',
+      'Origin, X-Requested-With, Content-Type, Accept, Authorization, ngrok-skip-browser-warning, Baggage, Sentry-Trace, Cache-Control, Pragma',
+    );
+  }
+  res.setHeader('Access-Control-Expose-Headers', 'Set-Cookie, Authorization');
+
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(204);
+  }
+  next();
+});
+
+const corsOptions: cors.CorsOptions = {
+  origin: (_origin, callback) => {
+    // Izinkan semua origin (Vercel, localhost, dll) dan refleksikan secara dinamis
+    // agar kompatibel penuh dengan credentials: true
+    callback(null, true);
+  },
+  credentials: true,
+  methods: ['GET', 'HEAD', 'PUT', 'PATCH', 'POST', 'DELETE', 'OPTIONS'],
+  optionsSuccessStatus: 204,
+};
+
+app.use(cors(corsOptions));
+
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use('/api', routes);
@@ -18,9 +56,10 @@ app.use(
   express.static(UPLOAD_DIR, {
     maxAge: '30d',
     immutable: true,
-    // Berkas berasal dari unggahan peserta — jangan biarkan peramban menebak
-    // tipenya lalu menjalankan isinya.
-    setHeaders: res => res.setHeader('X-Content-Type-Options', 'nosniff'),
+    setHeaders: (res, _path, _stat) => {
+      res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+    },
   }),
 );
 

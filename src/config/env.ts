@@ -2,7 +2,7 @@ import 'dotenv/config';
 import Joi from 'joi';
 
 const envSchema = Joi.object({
-    HOST: Joi.string().default('localhost'),
+    HOST: Joi.string().default('0.0.0.0'),
     PORT: Joi.number().default(3000),
     NODE_ENV: Joi.string().valid('development', 'production', 'test').default('development'),
 

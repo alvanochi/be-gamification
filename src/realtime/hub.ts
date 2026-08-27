@@ -14,9 +14,9 @@ import { Server as IOServer } from 'socket.io';
  */
 let io: IOServer | null = null;
 
-export const initRealtime = (server: HttpServer, corsOrigin: string | string[]) => {
+export const initRealtime = (server: HttpServer, corsOrigin: any = true) => {
   io = new IOServer(server, {
-    cors: { origin: corsOrigin, credentials: true },
+    cors: { origin: true, credentials: true },
     // Polling tetap diizinkan sebagai jaring pengaman bila proxy di depan
     // aplikasi belum meneruskan koneksi upgrade.
     transports: ['websocket', 'polling'],

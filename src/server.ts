@@ -12,7 +12,7 @@ const start = async () => {
     // Express dibungkus server HTTP eksplisit supaya socket.io bisa menumpang
     // port yang sama — tidak perlu port kedua yang harus dibuka di firewall.
     const server = http.createServer(app);
-    initRealtime(server, true as unknown as string);
+    initRealtime(server, '*');
 
     server.listen(env.PORT, env.HOST, () => {
       console.log(`Server running at http://${env.HOST}:${env.PORT} [${env.NODE_ENV}]`);
