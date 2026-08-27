@@ -42,6 +42,18 @@ export const updateProfileSchema = Joi.object({
   }),
 });
 
+/**
+ * Checkpoint 0. Seluruh isian boleh kosong: peserta yang memilih melewatinya
+ * mengirim `skipped: true` tanpa mengisi apa pun.
+ */
+export const socialProfileSchema = Joi.object({
+  businessName: Joi.string().trim().allow('', null).optional(),
+  youtubeAccount: Joi.string().trim().allow('', null).optional(),
+  instagramAccount: Joi.string().trim().allow('', null).optional(),
+  tiktokAccount: Joi.string().trim().allow('', null).optional(),
+  skipped: Joi.boolean().optional(),
+});
+
 export interface RegisterInput {
   email: string;
   phoneNumber: string;

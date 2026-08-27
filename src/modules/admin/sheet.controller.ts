@@ -27,6 +27,7 @@ const COLUMN_ALIASES: Record<string, string[]> = {
   email: ['email', 'e-mail', 'surel'],
   businessName: ['nama usaha', 'usaha', 'umkm', 'bisnis', 'business', 'businessname'],
   groupName: ['kelompok', 'nama kelompok', 'tim', 'nama tim', 'group', 'groupname'],
+  gender: ['jenis kelamin', 'kelamin', 'gender', 'l/p', 'jk'],
 };
 
 const normaliseHeader = (raw: string) => {
@@ -47,6 +48,18 @@ const mapRow = (row: Record<string, unknown>) => {
     if (text) mapped[field] = text;
   }
   return mapped;
+};
+
+/**
+ * Jenis kelamin ditulis panitia dengan bermacam cara: "L", "Laki-laki", "P",
+ * "Perempuan", kadang "Pria"/"Wanita". Semuanya dikerucutkan ke satu huruf.
+ */
+const normaliseGender = (raw?: string): 'L' | 'P' | null => {
+  const value = String(raw ?? '').trim().toUpperCase();
+  if (!value) return null;
+  if (value.startsWith('L') || value.startsWith('M') || value.startsWith('PRIA')) return 'L';
+  if (value.startsWith('P') || value.startsWith('W') || value.startsWith('F')) return 'P';
+  return null;
 };
 
 /**
@@ -80,10 +93,10 @@ export const downloadAccountTemplate = catchAsync(async (req: Request, res: Resp
 
   const rows = [
     {
-      Nama: 'Siti Rahayu',
-      'Nomor Telepon': '081234567890',
-      Email: 'siti@contoh.com',
-      'Nama Usaha': 'Batik Siti',
+      Nama: 'Alvano Hastagina',
+      'Nomor Telepon': '081297727009',
+      Email: 'alvanhastagina@gmail.com',
+      'Nama Usaha': 'Usaha kecap',
       Kelompok: 'Kelompok 1',
     },
   ];
@@ -118,6 +131,7 @@ export const exportAccounts = catchAsync(async (req: Request, res: Response) => 
       phoneNumber: users.phoneNumber,
       email: users.email,
       businessName: users.businessName,
+      gender: users.gender,
       role: users.role,
       checkInAt: users.checkInAt,
       groupName: groups.name,
@@ -130,6 +144,7 @@ export const exportAccounts = catchAsync(async (req: Request, res: Response) => 
     Nama: r.fullname,
     'Nomor Telepon': r.phoneNumber ?? '',
     Email: r.email ?? '',
+    'Jenis Kelamin': r.gender ?? '',
     'Nama Usaha': r.businessName ?? '',
     Peran: r.role,
     Hadir: r.checkInAt ? 'Ya' : 'Belum',
@@ -138,7 +153,7 @@ export const exportAccounts = catchAsync(async (req: Request, res: Response) => 
 
   const ws = XLSX.utils.json_to_sheet(sheetRows);
   ws['!cols'] = [
-    { wch: 28 }, { wch: 18 }, { wch: 26 }, { wch: 24 },
+    { wch: 28 }, { wch: 18 }, { wch: 26 }, { wch: 14 }, { wch: 24 },
     { wch: 14 }, { wch: 10 }, { wch: 20 },
   ];
 
@@ -159,8 +174,9 @@ export const exportAccounts = catchAsync(async (req: Request, res: Response) => 
  * beberapa baris, dan menggandakan peserta di hari-H jauh lebih merepotkan
  * daripada menimpa data yang memang sudah benar.
  *
- * Kolom Kelompok bersifat opsional; bila terisi, kelompoknya dibuatkan sesuai
- * nama yang tertulis lalu peserta baris itu langsung ditempatkan di dalamnya.
+ * Kolom Kelompok dan Jenis Kelamin bersifat opsional; bila Kelompok terisi,
+ * kelompoknya dibuatkan sesuai nama yang tertulis lalu peserta baris itu
+ * langsung ditempatkan di dalamnya.
  */
 export const importAccounts = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
   await ensureSuperAdmin(req.user?.id as string);
@@ -222,10 +238,15 @@ export const importAccounts = catchAsync(async (req: Request, res: Response, nex
     const [existing] = await db.select({ id: users.id }).from(users)
       .where(eq(users.phoneNumber, phone)).limit(1);
 
+    const gender = normaliseGender(row.gender);
+
     if (existing) {
       await db.update(users).set({
         fullname: row.fullname,
         businessName: row.businessName ?? null,
+        // Kolom yang dikosongkan panitia tidak menghapus data yang sudah ada —
+        // lembar kerja sering diunggah ulang hanya untuk menambal satu kolom.
+        ...(gender ? { gender } : {}),
         // Nomor telepon merangkap kata sandi, jadi hash-nya ikut disegarkan.
         password: await bcrypt.hash(phone, 10),
         ...(email ? { email } : {}),
@@ -251,6 +272,7 @@ export const importAccounts = catchAsync(async (req: Request, res: Response, nex
       phoneNumber: phone,
       email,
       businessName: row.businessName ?? null,
+      gender,
       role: 'PARTICIPANT',
       password: await bcrypt.hash(phone, 10),
       qrToken: nanoid(32),

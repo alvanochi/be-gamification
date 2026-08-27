@@ -502,11 +502,16 @@ export const getGroupDetails = async (groupId: string) => {
   const group = await db.select().from(groups).where(eq(groups.id, groupId)).limit(1);
   if (!group.length) throw ApiError.notFound('Group not found');
 
+  // Nomor telepon ikut: anggota satu kelompok saling mencari di lapangan, dan
+  // nomor inilah satu-satunya cara menghubungi yang belum sampai. Data ini
+  // hanya keluar ke sesama anggota kelompok — endpoint ini memang dijaga
+  // begitu — bukan ke seluruh peserta acara.
   const members = await db.select({
     id: users.id,
     fullname: users.fullname,
+    phoneNumber: users.phoneNumber,
     role: users.role,
-  }).from(users).where(eq(users.groupId, groupId));
+  }).from(users).where(eq(users.groupId, groupId)).orderBy(users.fullname);
 
   const settings = await getSettings();
 

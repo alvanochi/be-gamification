@@ -4,6 +4,10 @@ import { ensureAdmin } from '../../utils/roles.ts';
 import catchAsync from '../../utils/catchAsync.ts';
 import response from '../../utils/response.ts';
 import type { UpdateGroupNameInput, VoteLeaderInput } from '../../validations/group.validation.ts';
+import ApiError from '../../utils/ApiError.ts';
+import { db } from '../../db/index.ts';
+import { users } from '../../db/schema/users.ts';
+import { eq } from 'drizzle-orm';
 
 /**
  * Penempatan satu peserta ke kelompok.
@@ -20,8 +24,29 @@ export const autoGroup = catchAsync(async (req: Request, res: Response) => {
   response(res, 200, 'User auto-grouped successfully', result);
 });
 
+/**
+ * Rincian satu kelompok — hanya untuk anggotanya sendiri dan panitia.
+ *
+ * Isinya termasuk nomor telepon tiap anggota, yang memang dibutuhkan mereka
+ * untuk saling mencari di lapangan. Karena itu jalurnya dijaga: peserta hanya
+ * boleh membaca kelompoknya sendiri, bukan kelompok mana pun yang id-nya
+ * kebetulan diketahui.
+ */
 export const getGroup = catchAsync(async (req: Request, res: Response) => {
   const groupId = req.params.groupId as string;
+  const userId = req.user?.id as string;
+
+  const [user] = await db
+    .select({ role: users.role, groupId: users.groupId })
+    .from(users)
+    .where(eq(users.id, userId))
+    .limit(1);
+
+  const isPanitia = user?.role === 'ADMIN' || user?.role === 'SUPER_ADMIN';
+  if (!isPanitia && user?.groupId !== groupId) {
+    throw ApiError.forbidden('Kamu hanya bisa melihat kelompokmu sendiri');
+  }
+
   const result = await groupService.getGroupDetails(groupId);
   response(res, 200, 'Group details fetched successfully', result);
 });

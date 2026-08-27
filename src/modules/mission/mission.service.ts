@@ -6,6 +6,7 @@ import { submissions } from '../../db/schema/submissions.ts';
 import { assignments } from '../../db/schema/assignments.ts';
 import { missionCheckins } from '../../db/schema/mission_checkins.ts';
 import { barterSteps } from '../../db/schema/barter_steps.ts';
+import { missionQuestions, missionQuestionOptions } from '../../db/schema/mission_questions.ts';
 import ApiError from '../../utils/ApiError.ts';
 import {
   assertWithinEventWindow,
@@ -130,6 +131,19 @@ export const deleteMission = async (missionId: string) => {
     throw ApiError.conflict(`Misi ini masih menjadi prasyarat "${usedAsPrerequisite.title}"`);
   }
 
+  // Soal kuis menunjuk ke misinya lewat kunci asing, jadi menghapus misi
+  // berpertanyaan selalu gagal selama soalnya masih ada — itulah yang membuat
+  // misi Kuis tidak bisa dihapus sama sekali. Soalnya ikut dibuang di sini:
+  // penjagaan di atas sudah memastikan belum ada kelompok yang menjawabnya.
+  const questionRows = await db.select({ id: missionQuestions.id })
+    .from(missionQuestions).where(eq(missionQuestions.missionId, missionId));
+
+  if (questionRows.length) {
+    const questionIds = questionRows.map(q => q.id);
+    await db.delete(missionQuestionOptions).where(inArray(missionQuestionOptions.questionId, questionIds));
+    await db.delete(missionQuestions).where(inArray(missionQuestions.id, questionIds));
+  }
+
   await db.delete(missionCheckins).where(eq(missionCheckins.missionId, missionId));
   await db.delete(missions).where(eq(missions.id, missionId));
 };
@@ -252,7 +266,21 @@ const STATUS_ORDER: MissionBoardStatus[] = ['BELUM', 'MENUNGGU', 'SELESAI'];
 const TYPE_ORDER = ['TANTANGAN', 'BIGGER_BETTER', 'SOAL_LOKASI', 'KUIS'];
 
 export const getMissionBoard = async (groupId: string, query: MissionBoardQuery) => {
-  const available = await getAvailableMissions(groupId);
+  const settings = await getSettings();
+
+  // Sebelum panitia menekan "Munculkan Misi", peserta tetap melihat daftar
+  // misinya — hanya isinya yang belum bisa dibuka. Menyembunyikan daftarnya
+  // sama sekali membuat layar ini terasa rusak selama briefing, dan tim tidak
+  // punya gambaran apa pun tentang apa yang akan mereka hadapi.
+  // Misi bertahap tetap disembunyikan bahkan di pratinjau: kalau ikut tampil,
+  // daftarnya justru menyusut setelah aba-aba diberikan — persis kebalikan dari
+  // yang diharapkan peserta.
+  const available = settings.missionsReleased
+    ? await getAvailableMissions(groupId)
+    : await filterByPrerequisite(
+        groupId,
+        await db.select().from(missions).orderBy(missions.createdAt),
+      );
 
   const groupSubmissions = await db
     .select({
@@ -308,11 +336,16 @@ export const getMissionBoard = async (groupId: string, query: MissionBoardQuery)
       status = latest.status === 'APPROVED' ? 'SELESAI' : 'MENUNGGU';
     }
 
+    // Yel-yel berdiri di luar gerbang rilis: kelompok yang melewatinya di
+    // checkpoint tetap harus bisa mengirim buktinya sebelum tenggat habis.
+    const locked = !settings.missionsReleased && !mission.isYelYel;
+
     const sessionEndMinutes = parseHhMm(mission.sessionEnd);
     const minutesToSessionEnd = sessionEndMinutes === null ? null : sessionEndMinutes - nowMinutes;
 
     const urgent =
       status !== 'SELESAI' &&
+      settings.missionsReleased &&
       (mission.isMandatory ||
         (minutesToSessionEnd !== null &&
           minutesToSessionEnd >= 0 &&
@@ -321,6 +354,8 @@ export const getMissionBoard = async (groupId: string, query: MissionBoardQuery)
     return {
       ...mission,
       groupStatus: status,
+      /** Terkunci: judulnya tampil, isinya belum bisa dibuka peserta. */
+      locked,
       urgent,
       minutesToSessionEnd,
       /** Rantai barter yang sudah ditutup panitia tidak bisa dilanjutkan lagi. */
@@ -391,6 +426,7 @@ export const getMissionBoard = async (groupId: string, query: MissionBoardQuery)
     perPage,
     total: sorted.length,
     totalPages,
+    missionsReleased: settings.missionsReleased,
     counts,
     typeCounts,
     urgentCount,

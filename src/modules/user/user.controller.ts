@@ -2,7 +2,7 @@ import type { Request, Response, NextFunction } from 'express';
 import catchAsync from '../../utils/catchAsync.ts';
 import response from '../../utils/response.ts';
 import ApiError from '../../utils/ApiError.ts';
-import { createUser, getUserById, getProfile, updateProfile, checkEmailExists, checkPhoneExists, checkInByQrToken, searchParticipants } from './user.service.ts';
+import { createUser, getUserById, getProfile, updateProfile, saveSocialProfile, checkEmailExists, checkPhoneExists, checkInByQrToken, searchParticipants } from './user.service.ts';
 import { db } from '../../db/index.ts';
 import { users } from '../../db/schema/users.ts';
 import { eq } from 'drizzle-orm';
@@ -87,6 +87,23 @@ export const updateProfileHandler = catchAsync(async (req: Request, res: Respons
   }
 
   return response(res, 200, 'Profile updated successfully', result);
+});
+
+/** Checkpoint 0 — simpan profil usaha & akun media sosial, atau lewati. */
+export const saveSocialProfileHandler = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+  const userId = req.user?.id as string;
+  const result = await saveSocialProfile(userId, req.body ?? {});
+
+  if (!result) return next(ApiError.notFound('User not found'));
+
+  return response(
+    res,
+    200,
+    result.socialProfileSkipped
+      ? 'Dilewati — penilaian media sosial tidak dihitung'
+      : 'Profil usaha & media sosial tersimpan',
+    result,
+  );
 });
 
 /**

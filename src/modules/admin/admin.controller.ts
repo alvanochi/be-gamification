@@ -49,6 +49,7 @@ export const listAccounts = catchAsync(async (req: Request, res: Response, next:
             email: users.email,
             phoneNumber: users.phoneNumber,
             businessName: users.businessName,
+            gender: users.gender,
             role: users.role,
             checkInAt: users.checkInAt,
             groupId: users.groupId,
@@ -591,19 +592,21 @@ export const getGroupDetail = catchAsync(async (req: Request, res: Response, nex
     return response(res, 200, 'Group detail fetched', { members, activity, checkIns });
 });
 
-/** Daftar kelompok untuk pemilihan di form hasil lapangan. */
+/**
+ * Daftar kelompok — dipakai form hasil lapangan sekaligus tab Kelompok di
+ * master akun, jadi jumlah anggotanya ikut dihitung di sini.
+ */
 export const listGroups = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     await ensureAdmin(req.user?.id as string);
 
-    const rows = await db
-        .select({
-            id: groups.id,
-            name: groups.name,
-            score: groups.score,
-            categoryId: groups.categoryId,
-        })
-        .from(groups)
-        .orderBy(groups.name);
+    const rows = (await db.execute(sql`
+        SELECT g.id, g.name, g.score, g.category_id AS "categoryId",
+               (SELECT COUNT(*)::int FROM users u WHERE u.group_id = g.id)                       AS "memberCount",
+               (SELECT COUNT(*)::int FROM users u WHERE u.group_id = g.id AND u.gender = 'L')    AS "maleCount",
+               (SELECT COUNT(*)::int FROM users u WHERE u.group_id = g.id AND u.gender = 'P')    AS "femaleCount"
+        FROM groups g
+        ORDER BY g.name ASC
+    `)).rows;
 
     return response(res, 200, 'Groups fetched', rows);
 });
@@ -978,7 +981,7 @@ export const getPostQueue = catchAsync(async (req: Request, res: Response, next:
 export const createAccount = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
   await ensureSuperAdmin(req.user?.id as string);
 
-  const { fullname, phoneNumber, email, businessName, role } = req.body ?? {};
+  const { fullname, phoneNumber, email, businessName, role, gender } = req.body ?? {};
 
   if (!fullname || String(fullname).trim().length < 2) {
     return next(ApiError.badRequest('Nama lengkap wajib diisi'));
@@ -990,6 +993,12 @@ export const createAccount = catchAsync(async (req: Request, res: Response, next
   const wantedRole = role ?? 'PARTICIPANT';
   if (!['PARTICIPANT', 'ADMIN', 'SUPER_ADMIN'].includes(wantedRole)) {
     return next(ApiError.badRequest('Peran tidak dikenali'));
+  }
+
+  // Jenis kelamin boleh kosong — sebagian akun panitia memang tidak diisi.
+  const cleanGender = gender ? String(gender).trim().toUpperCase() : null;
+  if (cleanGender && !['L', 'P'].includes(cleanGender)) {
+    return next(ApiError.badRequest('Jenis kelamin harus L atau P'));
   }
 
   const phone = String(phoneNumber).trim();
@@ -1015,6 +1024,7 @@ export const createAccount = catchAsync(async (req: Request, res: Response, next
     phoneNumber: phone,
     email: cleanEmail,
     businessName: businessName ? String(businessName).trim() : null,
+    gender: cleanGender as 'L' | 'P' | null,
     role: wantedRole,
     password,
     qrToken: nanoid(32),
@@ -1028,7 +1038,7 @@ export const updateAccount = catchAsync(async (req: Request, res: Response, next
   await ensureSuperAdmin(req.user?.id as string);
 
   const targetId = req.params.userId as string;
-  const { fullname, phoneNumber, email, businessName } = req.body ?? {};
+  const { fullname, phoneNumber, email, businessName, gender } = req.body ?? {};
 
   const [target] = await db.select({ id: users.id }).from(users).where(eq(users.id, targetId)).limit(1);
   if (!target) return next(ApiError.notFound('Akun tidak ditemukan'));
@@ -1064,6 +1074,14 @@ export const updateAccount = catchAsync(async (req: Request, res: Response, next
 
   if (businessName !== undefined) {
     patch.businessName = businessName ? String(businessName).trim() : null;
+  }
+
+  if (gender !== undefined) {
+    const cleanGender = gender ? String(gender).trim().toUpperCase() : null;
+    if (cleanGender && !['L', 'P'].includes(cleanGender)) {
+      return next(ApiError.badRequest('Jenis kelamin harus L atau P'));
+    }
+    patch.gender = cleanGender;
   }
 
   await db.update(users).set(patch).where(eq(users.id, targetId));

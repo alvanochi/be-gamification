@@ -108,9 +108,18 @@ export const submitMission = async (groupId: string, userId: string, data: Submi
       eq(submissions.groupId, groupId)
     ));
 
-  const hasValidSubmission = existing.some((s: any) => s.status === 'PENDING' || s.status === 'APPROVED');
-  if (hasValidSubmission) {
-    throw ApiError.badRequest('Mission already submitted or pending validation');
+  // Satu bukti per kelompok. Yang membacanya peserta di tengah lapangan —
+  // biasanya orang kedua yang menekan kirim tanpa tahu temannya sudah
+  // mengirim duluan — jadi pesannya menyebut keadaannya, bukan istilah sistem.
+  const pendingSubmission = existing.find((s: any) => s.status === 'PENDING');
+  if (pendingSubmission) {
+    throw ApiError.badRequest(
+      'Bukti misi ini sudah dikirim anggota kelompokmu dan sedang menunggu validasi panitia.',
+    );
+  }
+  const approvedSubmission = existing.find((s: any) => s.status === 'APPROVED');
+  if (approvedSubmission) {
+    throw ApiError.badRequest('Misi ini sudah selesai dan poinnya sudah masuk untuk kelompokmu.');
   }
 
   if (mission[0].type === 'SOAL_LOKASI' && mission[0].geoLat && mission[0].geoLng && mission[0].geoRadius) {

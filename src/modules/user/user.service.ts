@@ -190,6 +190,17 @@ export const getProfile = async (userId: string) => {
             id: users.id,
             email: users.email,
             fullname: users.fullname,
+            // Ditunjukkan ke petugas saat identitas peserta perlu dicocokkan,
+            // dan dipakai peserta sendiri untuk masuk lagi setelah keluar.
+            phoneNumber: users.phoneNumber,
+            gender: users.gender,
+            // Checkpoint 0: profil usaha & akun media sosial.
+            businessName: users.businessName,
+            youtubeAccount: users.youtubeAccount,
+            instagramAccount: users.instagramAccount,
+            tiktokAccount: users.tiktokAccount,
+            socialProfileAt: users.socialProfileAt,
+            socialProfileSkipped: users.socialProfileSkipped,
             role: users.role,
             groupId: users.groupId,
             qrToken: users.qrToken,
@@ -208,6 +219,58 @@ export const getProfile = async (userId: string) => {
         qrToken: await ensureQrToken(user.id, user.qrToken),
         lastPostScan: await getLastPostScan(user.groupId),
     };
+};
+
+/**
+ * Checkpoint 0 — profil usaha & akun media sosial peserta.
+ *
+ * Peserta kini didaftarkan panitia dari lembar kerja yang tidak memuat akun
+ * sosialnya, padahal penilaian engagement bersandar pada akun itu. Melewati
+ * checkpoint ini boleh — yang tercatat adalah pilihannya, supaya panitia tahu
+ * mengapa sebuah kelompok tidak punya nilai media sosial.
+ */
+export const saveSocialProfile = async (
+    userId: string,
+    data: {
+        businessName?: string | null;
+        youtubeAccount?: string | null;
+        instagramAccount?: string | null;
+        tiktokAccount?: string | null;
+        skipped?: boolean;
+    },
+) => {
+    const clean = (value?: string | null) => {
+        const text = String(value ?? '').trim();
+        return text ? text : null;
+    };
+
+    const skipped = data.skipped === true;
+
+    const [updated] = await db
+        .update(users)
+        .set({
+            // Melewati checkpoint tidak menghapus data yang sudah ada — peserta
+            // bisa saja sudah terisi dari lembar kerja panitia.
+            ...(skipped
+                ? {}
+                : {
+                      businessName: clean(data.businessName),
+                      youtubeAccount: clean(data.youtubeAccount),
+                      instagramAccount: clean(data.instagramAccount),
+                      tiktokAccount: clean(data.tiktokAccount),
+                  }),
+            socialProfileAt: new Date(),
+            socialProfileSkipped: skipped,
+            updatedAt: new Date(),
+        })
+        .where(eq(users.id, userId))
+        .returning({
+            id: users.id,
+            socialProfileAt: users.socialProfileAt,
+            socialProfileSkipped: users.socialProfileSkipped,
+        });
+
+    return updated ?? null;
 };
 
 export const updateProfile = async (userId: string, data: UpdateProfileInput) => {
