@@ -334,8 +334,13 @@ export const searchLoginCandidates = async (keyword: string, scope: LoginScope =
 
     // Panitia lapangan pun tidak menghafal email yang dibuatkan untuknya, jadi
     // jalan masuknya sama: cari nama sendiri, buktikan dengan nomor telepon.
+    //
+    // POST_GUARD ikut di sini: penjaga pos justru yang paling sering masuk lewat
+    // ponsel di lapangan. Daftar peran ini harus sama dengan yang diterima
+    // loginPanitiaHandler — kalau salah satunya tertinggal, namanya tidak
+    // pernah muncul walau akunnya ada.
     const roleFilter = scope === 'PANITIA'
-        ? sql`${users.role} IN ('ADMIN', 'SUPER_ADMIN')`
+        ? sql`${users.role} IN ('ADMIN', 'SUPER_ADMIN', 'POST_GUARD')`
         : sql`${users.role} = 'PARTICIPANT'`;
 
     return await db
