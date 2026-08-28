@@ -1,4 +1,4 @@
-import { pgTable, varchar, text, boolean, integer, timestamp, pgEnum, jsonb } from 'drizzle-orm/pg-core';
+import { pgTable, varchar, text, boolean, integer, timestamp, pgEnum, jsonb, index } from 'drizzle-orm/pg-core';
 import { sponsors } from './sponsors.ts';
 
 // KUIS menutup jenis tugas "JAWAB PERTANYAAN" di sheet SIMULASI MR6 — misi yang
@@ -119,7 +119,11 @@ export const missions = pgTable('missions', {
 
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
-});
+}, table => [
+  // Dicari setiap kali petugas pos membuka layarnya — "pos mana saja yang
+  // saya jaga" adalah pencarian menurut kolom ini, bukan menurut kunci utama.
+  index('missions_guard_user_id_idx').on(table.guardUserId),
+]);
 
 export const missionOptions = pgTable('mission_options', {
   id: varchar('id', { length: 50 }).primaryKey(),

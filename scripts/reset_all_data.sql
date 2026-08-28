@@ -85,8 +85,20 @@ DELETE FROM authentications;
 DELETE FROM users
 WHERE COALESCE(LOWER(email), '') NOT IN (SELECT email FROM keep_accounts);
 
-UPDATE users SET assigned_mission_id = NULL, updated_at = NOW()
-WHERE assigned_mission_id IS NOT NULL;
+-- Dibungkus pemeriksaan kolom supaya skrip ini tetap jalan baik sebelum
+-- maupun sesudah migrasi 0010 — migrasi itulah yang melepas kolomnya dan
+-- memindahkan penugasan penjaga pos ke missions.guard_user_id.
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'users'
+      AND column_name = 'assigned_mission_id'
+  ) THEN
+    EXECUTE 'UPDATE users SET assigned_mission_id = NULL, updated_at = NOW()
+             WHERE assigned_mission_id IS NOT NULL';
+  END IF;
+END $$;
 
 -- =====================================================================
 -- 4. Master misi
