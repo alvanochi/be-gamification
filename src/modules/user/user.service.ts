@@ -6,6 +6,8 @@ import { users } from '../../db/schema/users.ts';
 import type { RegisterInput, UpdateProfileInput } from '../../validations/user.validation.ts';
 import type { LoginInput } from '../../validations/auth.validation.ts';
 import type { UserRole } from '../../utils/roles.ts';
+import { groups } from '../../db/schema/groups.ts';
+import { broadcastToGroup } from '../../realtime/hub.ts';
 
 export const createUser = async ({ email, phoneNumber, fullname, businessName, youtubeAccount, instagramAccount, tiktokAccount }: RegisterInput) => {
     const id = nanoid(16);
@@ -203,9 +205,16 @@ export const getProfile = async (userId: string) => {
             socialProfileAt: users.socialProfileAt,
             socialProfileSkipped: users.socialProfileSkipped,
             role: users.role,
-            // Pos yang dijaga — layar petugas memakainya untuk mengunci diri
-            // ke satu pos saja.
-            assignedMissionId: users.assignedMissionId,
+            // Pos yang dijaga — layar petugas memakainya untuk membatasi diri
+            // pada pos-posnya sendiri. Bisa lebih dari satu.
+            assignedMissionIds: sql<string[]>`COALESCE(
+                (SELECT ARRAY_AGG(m.id ORDER BY m.title) FROM missions m WHERE m.guard_user_id = ${users.id}),
+                ARRAY[]::varchar[]
+            )`,
+            assignedMissionTitles: sql<string[]>`COALESCE(
+                (SELECT ARRAY_AGG(m.title ORDER BY m.title) FROM missions m WHERE m.guard_user_id = ${users.id}),
+                ARRAY[]::varchar[]
+            )`,
             groupId: users.groupId,
             qrToken: users.qrToken,
             checkInAt: users.checkInAt,
@@ -390,16 +399,46 @@ export const verifyLoginByPhone = async (
  * dan mengantre dua kali untuk hal yang sama hanya memperlambat pembukaan
  * acara. QR peserta tetap dipakai, tetapi untuk lapor pos.
  */
+/**
+ * Menandai kehadiran, sekaligus menyalakan hitung mundur kelompoknya.
+ *
+ * Tenggat pembentukan kelompok dulu dihitung sejak barisnya dibuat panitia —
+ * yang bisa terjadi semalam sebelumnya, sehingga peserta membuka layarnya dan
+ * mendapati waktunya sudah habis sebelum mereka sempat berkumpul. Sekarang
+ * jamnya baru berjalan begitu ada satu anggota yang benar-benar masuk.
+ */
 export const markCheckedIn = async (userId: string) => {
     const [user] = await db
-        .select({ checkInAt: users.checkInAt })
+        .select({ checkInAt: users.checkInAt, groupId: users.groupId })
         .from(users)
         .where(eq(users.id, userId))
         .limit(1);
+
+    await startGroupClock(user?.groupId ?? null);
 
     if (user?.checkInAt) return user.checkInAt;
 
     const checkInAt = new Date();
     await db.update(users).set({ checkInAt, updatedAt: new Date() }).where(eq(users.id, userId));
     return checkInAt;
+};
+
+/**
+ * Menyalakan hitung mundur pembentukan sebuah kelompok, sekali saja.
+ *
+ * Anggota kedua dan seterusnya tidak menggeser jamnya: syaratnya "startedAt
+ * masih kosong" diperiksa di dalam WHERE, jadi dua login yang tiba bersamaan
+ * pun hanya menghasilkan satu penanda mulai.
+ */
+const startGroupClock = async (groupId: string | null) => {
+    if (!groupId) return;
+
+    const started = await db
+        .update(groups)
+        .set({ startedAt: new Date(), updatedAt: new Date() })
+        .where(sql`${groups.id} = ${groupId} AND ${groups.startedAt} IS NULL`)
+        .returning({ startedAt: groups.startedAt });
+
+    // Anggota lain yang layarnya sedang terbuka ikut melihat jamnya berjalan.
+    if (started.length) broadcastToGroup(groupId, 'group:updated', { groupId });
 };

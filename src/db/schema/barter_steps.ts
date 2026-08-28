@@ -21,7 +21,7 @@ export const barterSteps = pgTable('barter_steps', {
   awardedPoint: integer('awarded_point'),
   rejectReason: text('reject_reason'),
   validatedBy: varchar('validated_by', { length: 50 }),
-  validatedAt: timestamp('validated_at', { withTimezone: false }),
-  createdAt: timestamp('created_at', { withTimezone: false }).defaultNow().notNull(),
-  updatedAt: timestamp('updated_at', { withTimezone: false }).defaultNow().notNull(),
+  validatedAt: timestamp('validated_at', { withTimezone: true }),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 });

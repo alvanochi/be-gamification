@@ -11,5 +11,5 @@ export const scoreEntries = pgTable('score_entries', {
   referenceId: varchar('reference_id', { length: 50 }),
   point: integer('point').notNull(),
   createdBy: varchar('created_by', { length: 50 }).notNull().references(() => users.id),
-  createdAt: timestamp('created_at', { withTimezone: false }).defaultNow().notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 });

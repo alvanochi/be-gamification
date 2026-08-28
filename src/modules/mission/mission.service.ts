@@ -55,6 +55,7 @@ export const createMission = async (data: CreateMissionInput) => {
     category: data.category,
     clueType: data.clueType,
     clue: data.clue,
+    clueImages: data.clueImages ?? [],
     locationName: data.locationName,
     sessionStart: data.sessionStart,
     sessionEnd: data.sessionEnd,
@@ -145,13 +146,8 @@ export const deleteMission = async (missionId: string) => {
     await db.delete(missionQuestions).where(inArray(missionQuestions.id, questionIds));
   }
 
-  // Penjaga pos yang ditugaskan ke misi ini kehilangan posnya, bukan akunnya —
-  // kolomnya punya kunci asing ke missions, jadi tanpa ini penghapusan gagal
-  // sebagai galat basis data yang tidak bisa dimengerti panitia.
-  await db.update(users)
-    .set({ assignedMissionId: null, updatedAt: new Date() })
-    .where(eq(users.assignedMissionId, missionId));
-
+  // Penjaga posnya tidak perlu dilepas satu per satu: penugasan tersimpan di
+  // baris misi ini sendiri (missions.guardUserId), jadi ikut terhapus bersamanya.
   await db.delete(missionCheckins).where(eq(missionCheckins.missionId, missionId));
   await db.delete(missions).where(eq(missions.id, missionId));
 };
@@ -246,6 +242,8 @@ export interface MissionBoardQuery {
   search?: string;
   status?: MissionBoardStatus | 'SEMUA';
   type?: 'TANTANGAN' | 'BIGGER_BETTER' | 'SOAL_LOKASI' | 'KUIS' | 'SEMUA';
+  /** Terstruktur (ada pos & petugas) atau Mandiri (dikerjakan sendiri). */
+  category?: 'TERSTRUKTUR' | 'MANDIRI' | 'SEMUA';
   /** Hanya misi yang sesinya hampir tutup atau yang menahan misi lain. */
   urgentOnly?: boolean;
   page?: number;
@@ -401,11 +399,17 @@ export const getMissionBoard = async (groupId: string, query: MissionBoardQuery)
     TYPE_ORDER.map(type => [type, searched.filter(m => m.type === type).length]),
   ) as Record<string, number>;
 
+  const categoryCounts = {
+    TERSTRUKTUR: searched.filter(m => m.category === 'TERSTRUKTUR').length,
+    MANDIRI: searched.filter(m => m.category === 'MANDIRI').length,
+  };
+
   const urgentCount = searched.filter(m => m.urgent).length;
 
   const filtered = searched.filter(m => {
     if (query.status && query.status !== 'SEMUA' && m.groupStatus !== query.status) return false;
     if (query.type && query.type !== 'SEMUA' && m.type !== query.type) return false;
+    if (query.category && query.category !== 'SEMUA' && m.category !== query.category) return false;
     if (query.urgentOnly && !m.urgent) return false;
     return true;
   });
@@ -437,6 +441,7 @@ export const getMissionBoard = async (groupId: string, query: MissionBoardQuery)
     missionsReleased: settings.missionsReleased,
     counts,
     typeCounts,
+    categoryCounts,
     urgentCount,
     urgentWindowMinutes: URGENT_WINDOW_MINUTES,
     items: sorted.slice((page - 1) * perPage, page * perPage),

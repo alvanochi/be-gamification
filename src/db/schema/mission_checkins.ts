@@ -25,8 +25,8 @@ export const missionCheckins = pgTable(
     // langkah tanpa mengubah urutannya. Kolomnya dibiarkan di basis data
     // supaya data acara sebelumnya tidak ikut hilang.
     queueNumber: varchar('queue_number', { length: 20 }),
-    checkedInAt: timestamp('checked_in_at', { withTimezone: false }).defaultNow().notNull(),
-    checkedOutAt: timestamp('checked_out_at', { withTimezone: false }),
+    checkedInAt: timestamp('checked_in_at', { withTimezone: true }).defaultNow().notNull(),
+    checkedOutAt: timestamp('checked_out_at', { withTimezone: true }),
   },
   table => [unique('mission_checkins_mission_group_unique').on(table.missionId, table.groupId)],
 );

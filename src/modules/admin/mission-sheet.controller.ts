@@ -133,6 +133,7 @@ const COLUMNS = [
   'Durasi (menit)',
   'Jenis Petunjuk',
   'Isi Petunjuk',
+  'Foto Petunjuk',
   'Latitude',
   'Longitude',
   'Radius (meter)',
@@ -150,7 +151,7 @@ const COLUMNS = [
 const COL_WIDTHS = [
   { wch: 28 }, { wch: 44 }, { wch: 16 }, { wch: 14 }, { wch: 8 }, { wch: 14 },
   { wch: 18 }, { wch: 24 }, { wch: 16 }, { wch: 12 }, { wch: 12 }, { wch: 14 },
-  { wch: 16 }, { wch: 34 }, { wch: 14 }, { wch: 14 }, { wch: 14 },
+  { wch: 16 }, { wch: 34 }, { wch: 40 }, { wch: 14 }, { wch: 14 }, { wch: 14 },
   { wch: 20 }, { wch: 10 }, { wch: 10 }, { wch: 14 }, { wch: 12 },
   { wch: 18 }, { wch: 10 }, { wch: 16 }, { wch: 10 },
 ];
@@ -231,12 +232,73 @@ const resolveMapsLink = async (url: string) => {
   }
 };
 
+/**
+ * Membaca lembar pertama, dengan sel gabungan diurai lebih dulu.
+ *
+ * Panitia memakai merge untuk dua hal yang berlawanan, dan keduanya harus
+ * dibedakan:
+ *
+ *  1. Satu nilai untuk beberapa misi — nama petugas yang menjaga tiga pos
+ *     ditulis sekali lalu selnya di-merge ke bawah. Excel hanya menyimpan
+ *     isinya di sel kiri-atas, jadi tanpa penguraian hanya misi pertama yang
+ *     mendapat petugasnya dan sisanya diam-diam menjadi misi biasa.
+ *
+ *  2. Satu misi yang memakan beberapa baris — misi berisi lima foto petunjuk
+ *     menempati lima baris, dengan kolom judulnya di-merge menutupi semuanya.
+ *     Baris kedua sampai kelima bukan misi baru; menyalin judulnya ke sana
+ *     akan membuat satu misi terimpor lima kali.
+ *
+ * Pembedanya kolom pertama: baris yang judulnya hanya lanjutan merge dari
+ * baris di atasnya adalah sambungan, bukan baris baru.
+ */
 const readSheet = (buffer: Buffer) => {
   const wb = XLSX.read(buffer, { type: 'buffer' });
   const sheetName = wb.SheetNames[0];
   if (!sheetName) throw ApiError.badRequest('Berkas tidak berisi lembar apa pun');
-  return XLSX.utils.sheet_to_json<Record<string, unknown>>(wb.Sheets[sheetName], { defval: '' });
+
+  const ws = wb.Sheets[sheetName];
+  const merges = ws['!merges'] ?? [];
+
+  const continuationRows = new Set<number>();
+  for (const merge of merges) {
+    if (merge.s.c !== 0) continue;
+    for (let r = merge.s.r + 1; r <= merge.e.r; r += 1) continuationRows.add(r);
+  }
+
+  const range = XLSX.utils.decode_range(ws['!ref'] ?? 'A1');
+
+  for (const merge of merges) {
+    const source = ws[XLSX.utils.encode_cell(merge.s)];
+    if (!source) continue;
+
+    for (let r = merge.s.r; r <= merge.e.r; r += 1) {
+      if (continuationRows.has(r)) continue;
+      for (let c = merge.s.c; c <= merge.e.c; c += 1) {
+        if (r === merge.s.r && c === merge.s.c) continue;
+        ws[XLSX.utils.encode_cell({ r, c })] = { ...source };
+      }
+    }
+  }
+
+  // Baris sambungan dikosongkan supaya hilang bersama baris kosong lainnya.
+  for (const r of continuationRows) {
+    for (let c = range.s.c; c <= range.e.c; c += 1) {
+      delete ws[XLSX.utils.encode_cell({ r, c })];
+    }
+  }
+
+  return XLSX.utils.sheet_to_json<Record<string, unknown>>(ws, {
+    defval: '',
+    blankrows: false,
+  });
 };
+
+/** Daftar URL yang ditulis panitia dipisah baris baru, koma, atau titik koma. */
+const asUrlList = (value: string) =>
+  value
+    .split(/[\n,;]+/)
+    .map(v => v.trim())
+    .filter(v => /^https?:\/\//i.test(v));
 
 const sendWorkbook = (res: Response, rows: Record<string, unknown>[], filename: string) => {
   const ws = XLSX.utils.json_to_sheet(rows, { header: [...COLUMNS] });
@@ -274,6 +336,7 @@ export const downloadMissionTemplate = catchAsync(async (req: Request, res: Resp
       'Durasi (menit)': '',
       'Jenis Petunjuk': 'Tanpa petunjuk',
       'Isi Petunjuk': '',
+      'Foto Petunjuk': '',
       Latitude: '',
       Longitude: '',
       'Radius (meter)': '',
@@ -304,6 +367,9 @@ export const downloadMissionTemplate = catchAsync(async (req: Request, res: Resp
       'Durasi (menit)': 15,
       'Jenis Petunjuk': 'Tanpa petunjuk',
       'Isi Petunjuk': '',
+      // Beberapa URL foto dipisah baris baru atau koma. Boleh berdampingan
+      // dengan petunjuk teks — misi "foto di lima titik" butuh keduanya.
+      'Foto Petunjuk': '',
       Latitude: '',
       Longitude: '',
       'Radius (meter)': '',
@@ -334,6 +400,7 @@ export const downloadMissionTemplate = catchAsync(async (req: Request, res: Resp
       // Tautan Google Maps di kolom petunjuk otomatis dibaca koordinatnya;
       // isi Latitude & Longitude hanya bila tautannya tidak membawa titik.
       'Isi Petunjuk': 'https://maps.app.goo.gl/t8weMTQtaEmZ1q5y6',
+      'Foto Petunjuk': '',
       Latitude: '',
       Longitude: '',
       'Radius (meter)': 150,
@@ -361,12 +428,11 @@ export const exportMissions = catchAsync(async (req: Request, res: Response) => 
   // Nama penjaga tiap pos, supaya berkas yang diunduh bisa langsung diunggah
   // kembali tanpa kehilangan penugasannya.
   const guards = await db
-    .select({ missionId: users.assignedMissionId, fullname: users.fullname })
-    .from(users)
-    .where(sql`${users.assignedMissionId} IS NOT NULL`);
+    .select({ id: users.id, fullname: users.fullname })
+    .from(users);
 
-  const guardOf = (missionId: string) =>
-    guards.find(g => g.missionId === missionId)?.fullname ?? '';
+  const guardOf = (guardUserId: string | null) =>
+    guardUserId ? (guards.find(g => g.id === guardUserId)?.fullname ?? '') : '';
 
   const sheetRows = rows.map(m => ({
     Judul: m.title,
@@ -377,12 +443,13 @@ export const exportMissions = catchAsync(async (req: Request, res: Response) => 
     'Jumlah Pemain': m.participantCount,
     Pembuktian: PROOF_LABEL[m.proofType] ?? m.proofType,
     Lokasi: m.locationName ?? '',
-    Petugas: guardOf(m.id),
+    Petugas: guardOf(m.guardUserId),
     'Sesi Mulai': m.sessionStart ?? '',
     'Sesi Selesai': m.sessionEnd ?? '',
     'Durasi (menit)': m.durationMinutes ?? '',
     'Jenis Petunjuk': CLUE_LABEL[m.clueType] ?? m.clueType,
     'Isi Petunjuk': m.clue ?? '',
+    'Foto Petunjuk': (m.clueImages ?? []).join('\n'),
     Latitude: m.geoLat ?? '',
     Longitude: m.geoLng ?? '',
     'Radius (meter)': m.geoRadius ?? '',
@@ -478,10 +545,23 @@ export const importMissions = catchAsync(async (req: Request, res: Response, nex
       continue;
     }
 
-    const clueType = asEnum(CLUE_MAP, pick(rawRow, 'Jenis Petunjuk'), 'NONE')!;
+    const clueImages = asUrlList(pick(rawRow, 'Foto Petunjuk'));
     const clue = pick(rawRow, 'Isi Petunjuk') || null;
-    if (clueType !== 'NONE' && !clue) {
-      skipped.push({ row: rowNo, name: title, reason: 'Jenis Petunjuk terisi tapi Isi Petunjuk kosong' });
+
+    // Petunjuk berfoto tanpa teks tetap sah — jenisnya disimpulkan dari isinya
+    // supaya panitia tidak perlu mengisi dua kolom yang saling menjelaskan.
+    const clueType = asEnum(
+      CLUE_MAP,
+      pick(rawRow, 'Jenis Petunjuk'),
+      clue ? 'TEKS' : clueImages.length ? 'FOTO' : 'NONE',
+    )!;
+
+    if (clueType !== 'NONE' && !clue && !clueImages.length) {
+      skipped.push({
+        row: rowNo,
+        name: title,
+        reason: 'Jenis Petunjuk terisi tapi Isi Petunjuk & Foto Petunjuk kosong',
+      });
       continue;
     }
 
@@ -538,6 +618,7 @@ export const importMissions = catchAsync(async (req: Request, res: Response, nex
       durationMinutes: asInt(pick(rawRow, 'Durasi (menit)')),
       clueType: clueType as typeof missions.$inferInsert.clueType,
       clue,
+      clueImages,
       scoringMode: scoringMode as typeof missions.$inferInsert.scoringMode,
       pointMin,
       pointMax,
@@ -556,27 +637,21 @@ export const importMissions = catchAsync(async (req: Request, res: Response, nex
       .where(sql`LOWER(${missions.title}) = ${title.toLowerCase()}`)
       .limit(1);
 
-    let missionId: string;
-
-    if (existing) {
-      await db.update(missions).set(values).where(eq(missions.id, existing.id));
-      missionId = existing.id;
-      updated += 1;
-    } else {
-      missionId = nanoid(16);
-      await db.insert(missions).values({ id: missionId, ...values });
-      created += 1;
-    }
-
     /*
      * Penugasan penjaga pos.
      *
      * Nama di kolom Petugas dicocokkan ke akun yang sudah ada — akun tidak
      * dibuatkan di sini karena nomor telepon merangkap kata sandinya, dan
-     * lembar misi tidak memuatnya. Yang cocok diangkat menjadi POST_GUARD dan
-     * dikunci ke pos ini; Super Admin dibiarkan tetap Super Admin supaya
-     * unggahan misi tidak pernah bisa menurunkan hak penanggung jawab acara.
+     * lembar misi tidak memuatnya. Yang cocok diangkat menjadi POST_GUARD;
+     * Super Admin dibiarkan tetap Super Admin supaya unggahan misi tidak
+     * pernah bisa menurunkan hak penanggung jawab acara.
+     *
+     * Penugasannya disimpan di baris misi ini, sehingga satu petugas boleh
+     * memegang berapa pun pos — persis seperti sel PETUGAS yang di-merge ke
+     * beberapa baris di lembar panitia.
      */
+    let guardUserId: string | null = null;
+
     if (guardName) {
       const [guard] = await db
         .select({ id: users.id, role: users.role })
@@ -591,16 +666,33 @@ export const importMissions = catchAsync(async (req: Request, res: Response, nex
           reason: `Petugas "${guardName}" belum punya akun — buat akunnya dulu di Akun & Kelompok, lalu unggah ulang`,
         });
       } else {
-        await db
-          .update(users)
-          .set({
-            assignedMissionId: missionId,
-            ...(guard.role === 'SUPER_ADMIN' ? {} : { role: 'POST_GUARD' as const }),
-            updatedAt: new Date(),
-          })
-          .where(eq(users.id, guard.id));
+        guardUserId = guard.id;
+        if (guard.role !== 'SUPER_ADMIN' && guard.role !== 'POST_GUARD') {
+          await db.update(users)
+            .set({ role: 'POST_GUARD', updatedAt: new Date() })
+            .where(eq(users.id, guard.id));
+        }
         assignedGuards += 1;
       }
+    }
+
+    // Bukti "Laporan Petugas" hanya bisa dinilai oleh orang yang berjaga di
+    // sana. Tanpa petugas, misinya tersimpan tapi tidak akan pernah ada yang
+    // bisa memberinya nilai.
+    if (values.proofType === 'LAPORAN_PETUGAS' && !guardUserId) {
+      warnings.push({
+        row: rowNo,
+        name: title,
+        reason: 'Pembuktiannya "Laporan Petugas" tapi kolom Petugas kosong — tidak akan ada yang bisa menilainya',
+      });
+    }
+
+    if (existing) {
+      await db.update(missions).set({ ...values, guardUserId }).where(eq(missions.id, existing.id));
+      updated += 1;
+    } else {
+      await db.insert(missions).values({ id: nanoid(16), ...values, guardUserId });
+      created += 1;
     }
   }
 

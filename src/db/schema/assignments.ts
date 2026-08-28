@@ -12,6 +12,6 @@ export const assignments = pgTable('assignments', {
   assigneeUserId: varchar('assignee_user_id', { length: 50 }).references(() => users.id),
   status: assignmentStatusEnum('status').default('TODO').notNull(),
   rejectReason: text('reject_reason'),
-  createdAt: timestamp('created_at', { withTimezone: false }).defaultNow().notNull(),
-  updatedAt: timestamp('updated_at', { withTimezone: false }).defaultNow().notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 });

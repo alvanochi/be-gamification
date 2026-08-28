@@ -9,6 +9,6 @@ export const sponsors = pgTable('sponsors', {
   isActive: boolean('is_active').default(true).notNull(),
   impressions: integer('impressions').default(0).notNull(),
   clicks: integer('clicks').default(0).notNull(),
-  createdAt: timestamp('created_at', { withTimezone: false }).defaultNow().notNull(),
-  updatedAt: timestamp('updated_at', { withTimezone: false }).defaultNow().notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 });

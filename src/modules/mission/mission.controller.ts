@@ -129,6 +129,7 @@ export const getMissionBoard = catchAsync(async (req: Request, res: Response) =>
     search: req.query.search ? String(req.query.search) : undefined,
     status: req.query.status as any,
     type: req.query.type as any,
+    category: req.query.category as any,
     urgentOnly: req.query.urgent === '1' || req.query.urgent === 'true',
     page: Number(req.query.page) || 1,
     perPage: Number(req.query.perPage) || 10,

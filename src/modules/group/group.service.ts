@@ -128,7 +128,10 @@ export const generateGroups = async (maxPerGroup = 6) => {
 
       if (!target) {
         const newId = nanoid(16);
-        // startedAt menandai awal hitung mundur pembentukan kelompok.
+        // Di jalur ini startedAt memang diisi sekarang: kelompoknya baru
+        // dibentuk dari peserta yang sudah hadir, jadi detik ini juga adalah
+        // saat anggota pertamanya "masuk". Kelompok yang dibuat panitia lebih
+        // dulu tidak begitu — jamnya menunggu login pertama (markCheckedIn).
         await tx.insert(groups).values({
           id: newId,
           name: 'Group ' + nanoid(6).toUpperCase(),

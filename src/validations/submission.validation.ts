@@ -3,7 +3,10 @@ import { z } from 'zod';
 export const submitMissionSchema = z.object({
   body: z.object({
     missionId: z.string(),
-    mediaUrl: z.string().url().optional(),
+    // Bukti berupa berkas selalu berbentuk daftar. Misi yang meminta foto di
+    // beberapa titik tidak bisa diwakili satu URL, dan misi yang hanya minta
+    // satu foto cukup mengirim daftar berisi satu.
+    mediaUrls: z.array(z.string().url()).max(10).optional(),
     answerText: z.string().optional(),
     selectedOptionId: z.string().optional(),
     geoLat: z.string().optional(),
@@ -19,7 +22,7 @@ export const submitMissionSchema = z.object({
       )
       .optional(),
   }).refine((data: any) => {
-    return data.mediaUrl || data.answerText || data.selectedOptionId || data.answers?.length;
+    return data.mediaUrls?.length || data.answerText || data.selectedOptionId || data.answers?.length;
   }, {
     message: "Bukti wajib diisi (media, jawaban teks, atau jawaban pertanyaan)",
   }),

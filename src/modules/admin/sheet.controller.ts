@@ -205,7 +205,9 @@ export const importAccounts = catchAsync(async (req: Request, res: Response, nex
     }
 
     const id = nanoid(16);
-    await db.insert(groups).values({ id, name, startedAt: new Date() });
+    // Hitung mundurnya baru berjalan saat anggota pertama masuk — lihat
+    // markCheckedIn di user.service.
+    await db.insert(groups).values({ id, name });
     groupCache.set(key, id);
     return id;
   };

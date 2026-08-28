@@ -50,7 +50,7 @@ export const missions = pgTable('missions', {
   isMandatory: boolean('is_mandatory').default(false).notNull(),
   pointWeight: integer('point_weight').default(0).notNull(),
   sponsorId: varchar('sponsor_id', { length: 50 }).references(() => sponsors.id),
-  openAt: timestamp('open_at', { withTimezone: false }),
+  openAt: timestamp('open_at', { withTimezone: true }),
   prerequisiteId: varchar('prerequisite_id', { length: 50 }),
   participantCount: integer('participant_count').default(1).notNull(),
   geoLat: varchar('geo_lat', { length: 255 }),
@@ -65,6 +65,10 @@ export const missions = pgTable('missions', {
   // koordinat, URL foto/map) dan `clueType` memberi tahu UI cara menampilkannya.
   clueType: clueTypeEnum('clue_type').default('NONE').notNull(),
   clue: text('clue'),
+  // Foto pendamping petunjuk. Terpisah dari `clue` karena sebagian misi memberi
+  // petunjuk teks DAN foto titik sekaligus, mis. "FOTO DI TITIK BERIKUT INI"
+  // yang diikuti lima foto papan nama.
+  clueImages: jsonb('clue_images').$type<string[]>().default([]).notNull(),
   locationName: varchar('location_name', { length: 255 }),
 
   // Sesi harian, disimpan sebagai "HH:MM" waktu lokal acara — bukan timestamp,
@@ -85,6 +89,11 @@ export const missions = pgTable('missions', {
 
   // Misi TERSTRUKTUR mewajibkan lapor ke petugas pos lewat check-in online.
   requiresCheckIn: boolean('requires_check_in').default(false).notNull(),
+
+  // Panitia yang menjaga pos ini. Satu misi satu penjaga; satu penjaga boleh
+  // memegang beberapa misi — di lembar panitia hal itu ditulis dengan
+  // me-merge sel PETUGAS ke beberapa baris sekaligus.
+  guardUserId: varchar('guard_user_id', { length: 50 }),
 
   // Yel-yel: misi tantangan biasa, tetapi satu-satunya yang ikut muncul di
   // rangkaian checkpoint dan punya tenggatnya sendiri terhitung sejak nama
@@ -108,8 +117,8 @@ export const missions = pgTable('missions', {
   // memperoleh poin berkurang secara proporsional.
   timeTargetSeconds: integer('time_target_seconds'),
 
-  createdAt: timestamp('created_at', { withTimezone: false }).defaultNow().notNull(),
-  updatedAt: timestamp('updated_at', { withTimezone: false }).defaultNow().notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 });
 
 export const missionOptions = pgTable('mission_options', {

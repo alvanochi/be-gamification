@@ -14,11 +14,11 @@ export const eventSettings = pgTable('event_settings', {
   // Peserta dikumpulkan dan dibriefing dulu; daftar misi baru muncul setelah
   // panitia menekan "Munculkan Misi".
   missionsReleased: boolean('missions_released').default(false).notNull(),
-  missionsReleasedAt: timestamp('missions_released_at', { withTimezone: false }),
+  missionsReleasedAt: timestamp('missions_released_at', { withTimezone: true }),
 
   // --- Pengumuman ke peserta ---
   announcement: text('announcement'),
-  announcedAt: timestamp('announced_at', { withTimezone: false }),
+  announcedAt: timestamp('announced_at', { withTimezone: true }),
 
   // --- Timer & poin pembentukan kelompok ---
   formationLimitMinutes: integer('formation_limit_minutes').default(30).notNull(),
@@ -38,5 +38,5 @@ export const eventSettings = pgTable('event_settings', {
   // --- Leaderboard ---
   leaderboardTopN: integer('leaderboard_top_n').default(10).notNull(),
 
-  updatedAt: timestamp('updated_at', { withTimezone: false }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 });

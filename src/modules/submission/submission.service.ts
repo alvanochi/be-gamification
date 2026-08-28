@@ -199,7 +199,7 @@ export const submitMission = async (groupId: string, userId: string, data: Submi
     missionId: data.missionId,
     groupId,
     submittedBy: userId,
-    mediaUrl: data.mediaUrl,
+    mediaUrls: data.mediaUrls ?? [],
     answerText: data.answerText,
     selectedOptionId: data.selectedOptionId,
     status: 'PENDING',
@@ -213,7 +213,7 @@ export const getPendingSubmissions = async () => {
     .select({
       id: submissions.id,
       status: submissions.status,
-      mediaUrl: submissions.mediaUrl,
+      mediaUrls: submissions.mediaUrls,
       answerText: submissions.answerText,
       createdAt: submissions.createdAt,
       missionId: missions.id,

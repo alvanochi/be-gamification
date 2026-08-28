@@ -14,5 +14,5 @@ export const groupCategories = pgTable('group_categories', {
   color: varchar('color', { length: 9 }).notNull(),
   /** Urutan tampil di panel dan di layar peserta. */
   sortOrder: integer('sort_order').default(0).notNull(),
-  createdAt: timestamp('created_at', { withTimezone: false }).defaultNow().notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 });

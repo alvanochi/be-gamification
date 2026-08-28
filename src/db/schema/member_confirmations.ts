@@ -7,5 +7,5 @@ export const memberConfirmations = pgTable('member_confirmations', {
   groupId: varchar('group_id', { length: 50 }).notNull().references(() => groups.id),
   confirmerId: varchar('confirmer_id', { length: 50 }).notNull().references(() => users.id),
   confirmedId: varchar('confirmed_id', { length: 50 }).notNull().references(() => users.id),
-  createdAt: timestamp('created_at', { withTimezone: false }).defaultNow().notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 });

@@ -8,5 +8,5 @@ export const leaderVotes = pgTable('leader_votes', {
   round: integer('round').default(1).notNull(),
   voterId: varchar('voter_id', { length: 50 }).notNull().references(() => users.id),
   candidateId: varchar('candidate_id', { length: 50 }).notNull().references(() => users.id),
-  createdAt: timestamp('created_at', { withTimezone: false }).defaultNow().notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 });

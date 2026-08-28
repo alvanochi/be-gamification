@@ -49,6 +49,9 @@ const missionBody = z.object({
     category: z.enum(['TERSTRUKTUR', 'MANDIRI']).default('MANDIRI'),
     clueType: z.enum(['NONE', 'TEKS', 'MORSE', 'SANDI_ANGKA', 'GPS', 'FOTO', 'MAP']).default('NONE'),
     clue: z.string().optional(),
+    // Foto pendamping petunjuk. Boleh berdampingan dengan `clue`: misi
+    // "foto di titik berikut ini" memberi kalimat perintahnya lalu fotonya.
+    clueImages: z.array(z.string().url()).max(10).optional(),
     locationName: z.string().max(255).optional(),
     // "HH:MM" — jam lokal acara, bukan timestamp; lihat komentar di skema.
     sessionStart: z.string().regex(/^\d{2}:\d{2}$/, 'Format sesi harus HH:MM').optional(),

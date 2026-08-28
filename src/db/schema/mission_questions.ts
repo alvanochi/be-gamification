@@ -22,9 +22,9 @@ export const missionQuestions = pgTable('mission_questions', {
   // besar-kecil huruf dan spasi berlebih.
   answerKey: varchar('answer_key', { length: 255 }),
   point: integer('point').default(10).notNull(),
-  createdAt: timestamp('created_at', { withTimezone: false }).defaultNow().notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   /** Terisi berarti pertanyaan ini disembunyikan; jawaban lamanya tetap ada. */
-  deletedAt: timestamp('deleted_at', { withTimezone: false }),
+  deletedAt: timestamp('deleted_at', { withTimezone: true }),
 });
 
 // Ditandai terhapus, bukan dibuang, ketika sudah pernah dijawab peserta —
