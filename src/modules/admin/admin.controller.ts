@@ -1006,6 +1006,9 @@ export const getPostQueue = catchAsync(async (req: Request, res: Response, next:
       pointPerUnit: mission.pointPerUnit,
       maxUnits: mission.maxUnits,
       timeTargetSeconds: mission.timeTargetSeconds,
+      // Jatah waktu pengerjaan di pos. Petugaslah yang perlu melihatnya
+      // berjalan — dia yang memutuskan kapan kelompok harus berhenti.
+      durationMinutes: mission.durationMinutes,
     },
     // Yang masih di dalam pos didahulukan; yang sudah pergi tetap tampil
     // supaya penilaian yang terlewat masih bisa disusulkan.
