@@ -11,7 +11,7 @@ router.post('/', validate({ body: registerSchema }), userController.createUserHa
 
 // Pencarian nama untuk layar masuk (peserta maupun panitia) — sengaja
 // sebelum authenticate: yang mencari memang belum punya sesi.
-router.get('/search', userController.searchLoginCandidatesHandler);
+router.get('/search', userController.listLoginCandidatesHandler);
 
 // FR-01: panitia memindai QR peserta untuk check-in di lapangan.
 router.post('/check-in/qr', authenticate, userController.checkInByQrHandler);

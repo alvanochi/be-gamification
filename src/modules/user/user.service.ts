@@ -337,13 +337,24 @@ export const checkInUser = async (userId: string) => {
  */
 export type LoginScope = 'PARTICIPANT' | 'PANITIA';
 
-export const searchLoginCandidates = async (keyword: string, scope: LoginScope = 'PARTICIPANT') => {
-    const q = keyword.trim();
-    if (q.length < 3) return [];
-
-    // Panitia lapangan pun tidak menghafal email yang dibuatkan untuknya, jadi
-    // jalan masuknya sama: cari nama sendiri, buktikan dengan nomor telepon.
-    //
+/**
+ * Seluruh nama yang boleh dipilih di layar masuk.
+ *
+ * Dulu ini pencarian per ketikan: tiap 3 huruf memicu permintaan baru, dan di
+ * jaringan lapangan yang lambat hasilnya datang setelah orangnya sudah
+ * mengetik huruf berikutnya — daftarnya berkedip, kadang kosong, kadang
+ * memperlihatkan hasil dari kata kunci yang sudah tidak diketik lagi.
+ *
+ * Sekarang daftarnya diambil sekali di awal dan disaring di peramban.
+ * Jumlahnya memang muat: peserta satu acara ratusan orang, panitia belasan —
+ * beberapa puluh kilobyte sekali muat jauh lebih murah daripada puluhan
+ * permintaan yang saling mendahului.
+ *
+ * Isinya tetap hanya nama dan nama usaha. Nomor telepon dan email tidak pernah
+ * ikut, jadi daftarnya tidak bisa dipakai untuk apa pun selain memilih diri
+ * sendiri — dan nomor telepon itulah yang membuktikannya di langkah berikutnya.
+ */
+export const listLoginCandidates = async (scope: LoginScope = 'PARTICIPANT') => {
     // POST_GUARD ikut di sini: penjaga pos justru yang paling sering masuk lewat
     // ponsel di lapangan. Daftar peran ini harus sama dengan yang diterima
     // loginPanitiaHandler — kalau salah satunya tertinggal, namanya tidak
@@ -359,9 +370,8 @@ export const searchLoginCandidates = async (keyword: string, scope: LoginScope =
             businessName: users.businessName,
         })
         .from(users)
-        .where(sql`${roleFilter} AND ${users.fullname} ILIKE ${'%' + q + '%'}`)
-        .orderBy(users.fullname)
-        .limit(10);
+        .where(roleFilter)
+        .orderBy(users.fullname);
 };
 
 /**
