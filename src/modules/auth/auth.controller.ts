@@ -4,10 +4,11 @@ import response from '../../utils/response.ts';
 import {
   verifyUserCredential,
   findParticipantByQrToken,
-  verifyParticipant,
+  verifyLoginByPhone,
   markCheckedIn,
 } from '../user/user.service.ts';
 import ApiError from '../../utils/ApiError.ts';
+import type { UserRole } from '../../utils/roles.ts';
 import { generateAccessTokenHelper, generateRefreshTokenHelper, verifyRefreshTokenHelper } from '../../utils/token.ts';
 import { addRefreshToken, deleteRefreshToken, verifyAndRefreshToken } from './auth.service.ts';
 
@@ -33,37 +34,44 @@ export const loginByQrHandler = catchAsync(async (req: Request, res: Response, n
 });
 
 /**
- * Masuk sebagai peserta: pilih nama, buktikan dengan nomor telepon.
+ * Masuk dengan nama & nomor telepon.
  *
- * Peserta didaftarkan panitia, jadi ia tidak tahu email apa yang dipakaikan
- * untuknya — mencari namanya sendiri jauh lebih mungkin berhasil di tengah
- * lapangan daripada mengingat alamat surel.
- *
- * Kehadiran ditandai di sini. Nomor telepon sudah membuktikan ini benar
- * dirinya, dan mengantre lagi untuk dipindai panitia hanya memperlambat
- * pembukaan acara; QR peserta tetap dipakai, tetapi untuk lapor pos.
+ * Baik peserta maupun panitia didaftarkan orang lain, jadi keduanya sama-sama
+ * tidak menghafal email yang dipakaikan untuknya — mencari nama sendiri jauh
+ * lebih mungkin berhasil di tengah lapangan daripada mengingat alamat surel.
+ * Satu alur, dua pintu: yang membedakan hanya peran yang diterima dan apakah
+ * kehadiran ikut ditandai.
  */
-export const loginParticipantHandler = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
-  const { userId, phoneNumber } = req.body ?? {};
-  if (!userId || !phoneNumber) {
-    return next(ApiError.badRequest('Pilih namamu lalu isi nomor telepon'));
-  }
+const loginByName = (allowedRoles: UserRole[], markAttendance: boolean) =>
+  catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    const { userId, phoneNumber } = req.body ?? {};
+    if (!userId || !phoneNumber) {
+      return next(ApiError.badRequest('Pilih namamu lalu isi nomor telepon'));
+    }
 
-  const user = await verifyParticipant(userId, String(phoneNumber).trim());
-  if (!user) {
-    return next(
-      ApiError.unauthorized('Nomor telepon tidak cocok dengan nama itu. Coba lagi, atau tanya panitia.'),
-    );
-  }
+    const user = await verifyLoginByPhone(userId, String(phoneNumber).trim(), allowedRoles);
+    if (!user) {
+      return next(
+        ApiError.unauthorized('Nomor telepon tidak cocok dengan nama itu. Coba lagi, atau tanya panitia.'),
+      );
+    }
 
-  await markCheckedIn(user.id);
+    // Kehadiran peserta ditandai di sini: nomor teleponnya sudah membuktikan
+    // ini benar dirinya, dan mengantre lagi untuk dipindai panitia hanya
+    // memperlambat pembukaan acara. Panitia tidak ikut dihitung hadir.
+    if (markAttendance) await markCheckedIn(user.id);
 
-  const accessToken = generateAccessTokenHelper({ id: user.id });
-  const refreshToken = generateRefreshTokenHelper({ id: user.id });
-  await addRefreshToken({ userId: user.id, refreshToken });
+    const accessToken = generateAccessTokenHelper({ id: user.id });
+    const refreshToken = generateRefreshTokenHelper({ id: user.id });
+    await addRefreshToken({ userId: user.id, refreshToken });
 
-  return response(res, 201, `Selamat datang, ${user.fullname}`, { accessToken, refreshToken });
-});
+    return response(res, 201, `Selamat datang, ${user.fullname}`, { accessToken, refreshToken });
+  });
+
+export const loginParticipantHandler = loginByName(['PARTICIPANT'], true);
+
+/** Layar masuk panel: daftarnya hanya berisi akun panitia. */
+export const loginPanitiaHandler = loginByName(['ADMIN', 'SUPER_ADMIN', 'POST_GUARD'], false);
 
 export const loginHandler = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
   const { email, phoneNumber } = req.body;

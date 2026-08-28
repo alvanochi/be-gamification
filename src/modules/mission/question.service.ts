@@ -18,9 +18,6 @@ export interface QuestionInput {
   options?: Array<{ optionText: string; isCorrect: boolean }>;
 }
 
-/** Perbandingan jawaban isian: abaikan besar-kecil huruf dan spasi berlebih. */
-const normalize = (value: string) => value.trim().toLowerCase().replace(/\s+/g, ' ');
-
 export const replaceQuestions = async (missionId: string, questions: QuestionInput[]) => {
   const mission = await db.select().from(missions).where(eq(missions.id, missionId)).limit(1);
   if (!mission.length) throw ApiError.notFound('Mission not found');
@@ -153,6 +150,12 @@ export interface AnswerInput {
 
 /**
  * Periksa jawaban kelompok dan hitung poinnya.
+ *
+ * Hanya pilihan ganda yang dinilai sistem. Isian singkat dikembalikan apa
+ * adanya untuk dinilai panitia: pencocokan huruf demi huruf menolak jawaban
+ * yang sebenarnya benar — singkatan, ejaan lain, huruf yang tertukar — dan
+ * peserta tidak punya siapa pun untuk membantah di tengah lapangan.
+ *
  * Dijalankan di server agar kunci jawaban tidak pernah sampai ke peserta.
  */
 export const gradeAnswers = async (missionId: string, answers: AnswerInput[]) => {
@@ -173,20 +176,23 @@ export const gradeAnswers = async (missionId: string, answers: AnswerInput[]) =>
 
   let point = 0;
   let correctCount = 0;
+  let manualCount = 0;
+  let manualPoint = 0;
   const graded: Array<AnswerInput & { isCorrect: boolean }> = [];
 
   for (const question of questions) {
     const answer = answers.find(a => a.questionId === question.id);
     let isCorrect = false;
 
-    if (answer) {
-      if (question.type === 'PILIHAN_GANDA') {
-        isCorrect = correctOptions.some(
-          o => o.id === answer.selectedOptionId && o.questionId === question.id && o.isCorrect,
-        );
-      } else if (answer.answerText && question.answerKey) {
-        isCorrect = normalize(answer.answerText) === normalize(question.answerKey);
-      }
+    if (question.type === 'ISIAN_SINGKAT') {
+      // Menunggu panitia. Nilainya belum masuk hitungan, dan bobotnya dicatat
+      // supaya panitia tahu berapa poin yang masih tergantung.
+      manualCount += 1;
+      manualPoint += question.point;
+    } else if (answer) {
+      isCorrect = correctOptions.some(
+        o => o.id === answer.selectedOptionId && o.questionId === question.id && o.isCorrect,
+      );
     }
 
     if (isCorrect) {
@@ -197,7 +203,55 @@ export const gradeAnswers = async (missionId: string, answers: AnswerInput[]) =>
     graded.push({ ...(answer ?? { questionId: question.id }), isCorrect });
   }
 
-  return { point, correctCount, totalQuestions: questions.length, graded };
+  return {
+    point,
+    correctCount,
+    totalQuestions: questions.length,
+    /** Berapa soal isian singkat yang menunggu penilaian panitia. */
+    manualCount,
+    /** Total poin yang masih tergantung di soal isian singkat. */
+    manualPoint,
+    choiceCount: questions.length - manualCount,
+    graded,
+  };
+};
+
+/**
+ * Jawaban satu submission beserta soal & kunci jawabannya.
+ *
+ * Dibaca antrean validasi untuk misi kuis berisian singkat: panitia perlu
+ * melihat apa yang ditulis kelompok, di sebelah kunci jawabannya.
+ */
+export const getSubmissionAnswers = async (submissionId: string) => {
+  const rows = await db
+    .select({
+      questionId: missionQuestions.id,
+      orderNo: missionQuestions.orderNo,
+      questionText: missionQuestions.questionText,
+      type: missionQuestions.type,
+      point: missionQuestions.point,
+      answerKey: missionQuestions.answerKey,
+      answerText: submissionAnswers.answerText,
+      selectedOptionId: submissionAnswers.selectedOptionId,
+      isCorrect: submissionAnswers.isCorrect,
+    })
+    .from(submissionAnswers)
+    .innerJoin(missionQuestions, eq(missionQuestions.id, submissionAnswers.questionId))
+    .where(eq(submissionAnswers.submissionId, submissionId))
+    .orderBy(asc(missionQuestions.orderNo));
+
+  const optionIds = rows.map(r => r.selectedOptionId).filter((id): id is string => !!id);
+  const options = optionIds.length
+    ? await db
+        .select({ id: missionQuestionOptions.id, optionText: missionQuestionOptions.optionText })
+        .from(missionQuestionOptions)
+        .where(inArray(missionQuestionOptions.id, optionIds))
+    : [];
+
+  return rows.map(row => ({
+    ...row,
+    selectedOptionText: options.find(o => o.id === row.selectedOptionId)?.optionText ?? null,
+  }));
 };
 
 export const saveAnswers = async (

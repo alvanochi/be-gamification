@@ -58,6 +58,24 @@ export const getPendingCounts = catchAsync(async (req: Request, res: Response) =
   response(res, 200, 'Pending counts fetched', result);
 });
 
+/**
+ * Rincian jawaban kuis untuk layar validasi.
+ *
+ * Dipisahkan dari daftar antrean dengan sengaja: hanya misi kuis berisian
+ * singkat yang membutuhkannya, dan menyeret seluruh jawaban setiap lima detik
+ * untuk semua kartu di antrean jelas terlalu mahal.
+ */
+export const getQuizReview = catchAsync(async (req: Request, res: Response) => {
+  const userId = req.user?.id as string;
+  const user = await db.select().from(users).where(eq(users.id, userId)).limit(1);
+  if (!user.length || (user[0].role !== 'ADMIN' && user[0].role !== 'SUPER_ADMIN')) {
+    throw ApiError.forbidden('Only ADMIN or SUPER_ADMIN can view the validation queue');
+  }
+
+  const result = await submissionService.getQuizReview(req.params.submissionId as string);
+  response(res, 200, 'Quiz review fetched', result);
+});
+
 export const validateSubmission = catchAsync(async (req: Request, res: Response) => {
   const submissionId = req.params.submissionId as string;
   const validatorId = req.user?.id as string;

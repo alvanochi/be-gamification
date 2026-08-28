@@ -5,6 +5,7 @@ import { db } from '../../db/index.ts';
 import { users } from '../../db/schema/users.ts';
 import type { RegisterInput, UpdateProfileInput } from '../../validations/user.validation.ts';
 import type { LoginInput } from '../../validations/auth.validation.ts';
+import type { UserRole } from '../../utils/roles.ts';
 
 export const createUser = async ({ email, phoneNumber, fullname, businessName, youtubeAccount, instagramAccount, tiktokAccount }: RegisterInput) => {
     const id = nanoid(16);
@@ -202,6 +203,9 @@ export const getProfile = async (userId: string) => {
             socialProfileAt: users.socialProfileAt,
             socialProfileSkipped: users.socialProfileSkipped,
             role: users.role,
+            // Pos yang dijaga — layar petugas memakainya untuk mengunci diri
+            // ke satu pos saja.
+            assignedMissionId: users.assignedMissionId,
             groupId: users.groupId,
             qrToken: users.qrToken,
             checkInAt: users.checkInAt,
@@ -322,9 +326,17 @@ export const checkInUser = async (userId: string) => {
  * tidak ada nomor telepon, email, apalagi token QR — dan hanya bila kata
  * kuncinya cukup spesifik, supaya daftar peserta tidak bisa dipanen utuh.
  */
-export const searchParticipants = async (keyword: string) => {
+export type LoginScope = 'PARTICIPANT' | 'PANITIA';
+
+export const searchLoginCandidates = async (keyword: string, scope: LoginScope = 'PARTICIPANT') => {
     const q = keyword.trim();
     if (q.length < 3) return [];
+
+    // Panitia lapangan pun tidak menghafal email yang dibuatkan untuknya, jadi
+    // jalan masuknya sama: cari nama sendiri, buktikan dengan nomor telepon.
+    const roleFilter = scope === 'PANITIA'
+        ? sql`${users.role} IN ('ADMIN', 'SUPER_ADMIN')`
+        : sql`${users.role} = 'PARTICIPANT'`;
 
     return await db
         .select({
@@ -333,7 +345,7 @@ export const searchParticipants = async (keyword: string) => {
             businessName: users.businessName,
         })
         .from(users)
-        .where(sql`${users.role} = 'PARTICIPANT' AND ${users.fullname} ILIKE ${'%' + q + '%'}`)
+        .where(sql`${roleFilter} AND ${users.fullname} ILIKE ${'%' + q + '%'}`)
         .orderBy(users.fullname)
         .limit(10);
 };
@@ -344,19 +356,25 @@ export const searchParticipants = async (keyword: string) => {
  * Nomor telepon di sini berperan sebagai kata sandi — dibandingkan dengan hash
  * yang sama seperti jalur masuk panitia, bukan dicocokkan sebagai teks biasa.
  */
-export const verifyParticipant = async (userId: string, phoneNumber: string) => {
+export const verifyLoginByPhone = async (
+    userId: string,
+    phoneNumber: string,
+    allowedRoles: UserRole[],
+) => {
     const [user] = await db
         .select({ id: users.id, role: users.role, password: users.password, fullname: users.fullname })
         .from(users)
         .where(eq(users.id, userId))
         .limit(1);
 
-    if (!user || user.role !== 'PARTICIPANT' || !user.password) return null;
+    // Peran dijaga di sini, bukan hanya di daftar nama: daftar itu hanya
+    // menyaring apa yang terlihat, sedangkan permintaannya bisa disusun sendiri.
+    if (!user || !allowedRoles.includes(user.role) || !user.password) return null;
 
     const match = await bcrypt.compare(phoneNumber, user.password);
     if (!match) return null;
 
-    return { id: user.id, fullname: user.fullname };
+    return { id: user.id, fullname: user.fullname, role: user.role };
 };
 
 /**

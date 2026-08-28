@@ -21,7 +21,7 @@ import bcrypt from 'bcrypt';
 import * as groupService from '../group/group.service.ts';
 import * as missionService from '../mission/mission.service.ts';
 import { ensureQrToken } from '../user/user.service.ts';
-import { ensureAdmin, ensureSuperAdmin } from '../../utils/roles.ts';
+import { ensureAdmin, ensurePostOfficer, ensureSuperAdmin } from '../../utils/roles.ts';
 import { submissions } from '../../db/schema/submissions.ts';
 import { calculateMissionPoint } from '../../utils/scoring.ts';
 import { getSettings } from '../settings/settings.service.ts';
@@ -56,10 +56,14 @@ export const listAccounts = catchAsync(async (req: Request, res: Response, next:
             // Nama kelompoknya ikut supaya panitia bisa melihat — dan mencari —
             // pembagian kelompok tanpa berpindah ke daftar lain.
             groupName: groups.name,
+            // Pos yang dijaga — hanya berarti bagi akun POST_GUARD.
+            assignedMissionId: users.assignedMissionId,
+            assignedMissionTitle: missions.title,
             qrToken: users.qrToken,
         })
         .from(users)
         .leftJoin(groups, eq(groups.id, users.groupId))
+        .leftJoin(missions, eq(missions.id, users.assignedMissionId))
         .orderBy(users.fullname);
 
     const filtered = rows.filter(u => {
@@ -89,6 +93,7 @@ export const listAccounts = catchAsync(async (req: Request, res: Response, next:
             all: rows.length,
             PARTICIPANT: rows.filter(u => u.role === 'PARTICIPANT').length,
             ADMIN: rows.filter(u => u.role === 'ADMIN').length,
+            POST_GUARD: rows.filter(u => u.role === 'POST_GUARD').length,
             SUPER_ADMIN: rows.filter(u => u.role === 'SUPER_ADMIN').length,
         },
         items,
@@ -155,7 +160,7 @@ export const setAccountRolesBulk = catchAsync(async (req: Request, res: Response
     if (!Array.isArray(userIds) || userIds.length === 0) {
         return next(ApiError.badRequest('Pilih akun terlebih dahulu'));
     }
-    if (!['PARTICIPANT', 'ADMIN', 'SUPER_ADMIN'].includes(role)) {
+    if (!['PARTICIPANT', 'ADMIN', 'SUPER_ADMIN', 'POST_GUARD'].includes(role)) {
         return next(ApiError.badRequest('Peran tidak dikenali'));
     }
 
@@ -185,7 +190,7 @@ export const setAccountRole = catchAsync(async (req: Request, res: Response, nex
     const targetId = req.params.userId as string;
     const { role } = req.body ?? {};
 
-    if (!['PARTICIPANT', 'ADMIN', 'SUPER_ADMIN'].includes(role)) {
+    if (!['PARTICIPANT', 'ADMIN', 'SUPER_ADMIN', 'POST_GUARD'].includes(role)) {
         throw ApiError.badRequest('Peran tidak dikenali');
     }
 
@@ -825,11 +830,21 @@ export const listParticipantQrCards = catchAsync(async (req: Request, res: Respo
  */
 export const postScan = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
   const officerId = req.user?.id as string;
-  await ensureAdmin(officerId);
+  await ensurePostOfficer(officerId);
 
   const { qrToken, missionId, action } = req.body ?? {};
   if (!qrToken) return next(ApiError.badRequest('qrToken wajib diisi'));
-  if (!missionId) return next(ApiError.badRequest('Pilih pos/misi terlebih dahulu'));
+
+  // QR misi terstruktur membawa posnya sendiri: "POS:<missionId>:<qrToken>".
+  // Dengan begitu petugas tidak perlu memilih pos lebih dulu — dan tidak bisa
+  // salah memilih, yang dulu mencatat kelompok di pos yang tidak mereka datangi.
+  const scanned = String(qrToken);
+  const parts = scanned.startsWith('POS:') ? scanned.split(':') : null;
+  const participantToken = parts ? parts[2] : scanned;
+  const resolvedMissionId = parts ? parts[1] : missionId;
+
+  if (!participantToken) return next(ApiError.badRequest('QR tidak terbaca'));
+  if (!resolvedMissionId) return next(ApiError.badRequest('Pilih pos/misi terlebih dahulu'));
 
   // `action` boleh dikosongkan. Petugas yang menghadapi antrean tidak sempat
   // menekan tombol mode setiap kali, dan salah mode berarti catatan yang
@@ -842,7 +857,7 @@ export const postScan = catchAsync(async (req: Request, res: Response, next: Nex
   const [participant] = await db
     .select({ id: users.id, fullname: users.fullname, role: users.role, groupId: users.groupId })
     .from(users)
-    .where(eq(users.qrToken, qrToken))
+    .where(eq(users.qrToken, participantToken))
     .limit(1);
 
   if (!participant || participant.role !== 'PARTICIPANT') {
@@ -852,17 +867,27 @@ export const postScan = catchAsync(async (req: Request, res: Response, next: Nex
     return next(ApiError.badRequest(`${participant.fullname} belum tergabung dalam kelompok`));
   }
 
-  const [mission] = await db.select().from(missions).where(eq(missions.id, missionId)).limit(1);
+  const [mission] = await db.select().from(missions).where(eq(missions.id, resolvedMissionId)).limit(1);
   if (!mission) return next(ApiError.notFound('Pos tidak ditemukan'));
 
-  const existing = await missionService.getCheckIn(missionId, participant.groupId);
+  // Penjaga pos hanya boleh memindai di posnya sendiri.
+  const [officer] = await db.select({ role: users.role, assignedMissionId: users.assignedMissionId })
+    .from(users).where(eq(users.id, officerId)).limit(1);
+
+  if (officer?.role === 'POST_GUARD' && officer.assignedMissionId !== resolvedMissionId) {
+    return next(
+      ApiError.forbidden(`QR ini milik pos lain. Kamu ditugaskan menjaga pos yang berbeda.`),
+    );
+  }
+
+  const existing = await missionService.getCheckIn(resolvedMissionId, participant.groupId);
   const resolvedAction =
     explicitAction ?? (existing && !existing.checkedOutAt ? 'CHECK_OUT' : 'CHECK_IN');
 
   const result =
     resolvedAction === 'CHECK_IN'
-      ? await missionService.checkInMission(missionId, participant.groupId, officerId, participant.id)
-      : await missionService.checkOutMission(missionId, participant.groupId, officerId, true);
+      ? await missionService.checkInMission(resolvedMissionId, participant.groupId, officerId, participant.id)
+      : await missionService.checkOutMission(resolvedMissionId, participant.groupId, officerId, true);
 
   const [group] = await db
     .select({ name: groups.name })
@@ -876,7 +901,7 @@ export const postScan = catchAsync(async (req: Request, res: Response, next: Nex
   // kedatangannya sudah masuk sistem.
   broadcastToGroup(participant.groupId, 'post:scanned', {
     action: resolvedAction,
-    missionId,
+    missionId: resolvedMissionId,
     postName: mission.title,
     participantName: participant.fullname,
     groupName: group?.name ?? null,
@@ -903,9 +928,18 @@ export const postScan = catchAsync(async (req: Request, res: Response, next: Nex
  * pindah halaman lalu mencari nama kelompoknya di daftar berisi puluhan.
  */
 export const getPostQueue = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
-  await ensureAdmin(req.user?.id as string);
+  const officerId = req.user?.id as string;
+  await ensurePostOfficer(officerId);
 
   const missionId = req.params.missionId as string;
+
+  // Penjaga pos hanya melihat antrean posnya sendiri.
+  const [officer] = await db.select({ role: users.role, assignedMissionId: users.assignedMissionId })
+    .from(users).where(eq(users.id, officerId)).limit(1);
+
+  if (officer?.role === 'POST_GUARD' && officer.assignedMissionId !== missionId) {
+    return next(ApiError.forbidden('Kamu ditugaskan menjaga pos yang berbeda'));
+  }
   const [mission] = await db.select().from(missions).where(eq(missions.id, missionId)).limit(1);
   if (!mission) return next(ApiError.notFound('Pos tidak ditemukan'));
 
@@ -991,7 +1025,7 @@ export const createAccount = catchAsync(async (req: Request, res: Response, next
   }
 
   const wantedRole = role ?? 'PARTICIPANT';
-  if (!['PARTICIPANT', 'ADMIN', 'SUPER_ADMIN'].includes(wantedRole)) {
+  if (!['PARTICIPANT', 'ADMIN', 'SUPER_ADMIN', 'POST_GUARD'].includes(wantedRole)) {
     return next(ApiError.badRequest('Peran tidak dikenali'));
   }
 
@@ -1038,7 +1072,7 @@ export const updateAccount = catchAsync(async (req: Request, res: Response, next
   await ensureSuperAdmin(req.user?.id as string);
 
   const targetId = req.params.userId as string;
-  const { fullname, phoneNumber, email, businessName, gender } = req.body ?? {};
+  const { fullname, phoneNumber, email, businessName, gender, assignedMissionId } = req.body ?? {};
 
   const [target] = await db.select({ id: users.id }).from(users).where(eq(users.id, targetId)).limit(1);
   if (!target) return next(ApiError.notFound('Akun tidak ditemukan'));
@@ -1082,6 +1116,24 @@ export const updateAccount = catchAsync(async (req: Request, res: Response, next
       return next(ApiError.badRequest('Jenis kelamin harus L atau P'));
     }
     patch.gender = cleanGender;
+  }
+
+  // Pos yang dijaga. Hanya pos berpetugas yang boleh ditugaskan — misi mandiri
+  // tidak punya meja untuk dijaga siapa pun.
+  if (assignedMissionId !== undefined) {
+    const missionId = assignedMissionId ? String(assignedMissionId) : null;
+
+    if (missionId) {
+      const [post] = await db.select({ id: missions.id, requiresCheckIn: missions.requiresCheckIn })
+        .from(missions).where(eq(missions.id, missionId)).limit(1);
+
+      if (!post) return next(ApiError.notFound('Pos tidak ditemukan'));
+      if (!post.requiresCheckIn) {
+        return next(ApiError.badRequest('Misi itu bukan pos berpetugas — centang "Wajib check-in" dulu di Kelola Misi'));
+      }
+    }
+
+    patch.assignedMissionId = missionId;
   }
 
   await db.update(users).set(patch).where(eq(users.id, targetId));

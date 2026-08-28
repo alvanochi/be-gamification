@@ -1,7 +1,12 @@
 import { pgTable, varchar, timestamp, boolean, pgEnum } from 'drizzle-orm/pg-core';
 import { groups } from './groups.ts';
 
-export const userRoleEnum = pgEnum('user_role', ['PARTICIPANT', 'ADMIN', 'SUPER_ADMIN']);
+/**
+ * POST_GUARD adalah panitia yang ditugaskan menjaga satu pos saja: memindai
+ * kedatangan, memberi nilai, memindai kepergian. Ia tidak punya akses ke
+ * bagian panel yang lain.
+ */
+export const userRoleEnum = pgEnum('user_role', ['PARTICIPANT', 'ADMIN', 'SUPER_ADMIN', 'POST_GUARD']);
 
 
 export const users = pgTable('users', {
@@ -29,4 +34,8 @@ export const users = pgTable('users', {
   // membedakan keduanya karena penilaian media sosial bergantung padanya.
   socialProfileAt: timestamp('social_profile_at', { withTimezone: false }),
   socialProfileSkipped: boolean('social_profile_skipped').default(false).notNull(),
+
+  // Pos yang dijaga — hanya berlaku untuk POST_GUARD. Kunci asingnya dipasang
+  // migrasi 0009 di basis data.
+  assignedMissionId: varchar('assigned_mission_id', { length: 50 }),
 });

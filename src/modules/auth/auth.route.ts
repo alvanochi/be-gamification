@@ -8,8 +8,10 @@ const router = Router();
 
 router.post('/', validate({ body: loginSchema }), authController.loginHandler);
 router.post('/qr', authController.loginByQrHandler);
-// Masuk sebagai peserta: nama yang dicari, dibuktikan nomor telepon.
+// Masuk lewat nama yang dicari, dibuktikan nomor telepon. Dua pintu terpisah
+// supaya peran yang diterima tiap layar masuk tidak pernah bercampur.
 router.post('/participant', authController.loginParticipantHandler);
+router.post('/panitia', authController.loginPanitiaHandler);
 router.put('/', validate({ body: refreshTokenSchema }), authController.refreshTokenHandler);
 router.delete('/', authenticate, authController.logoutHandler);
 

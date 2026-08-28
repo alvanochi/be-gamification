@@ -1,4 +1,4 @@
-import { eq, and, sql, inArray } from 'drizzle-orm';
+import { eq, and, sql, inArray, isNull } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import { db } from '../../db/index.ts';
 import { missions } from '../../db/schema/missions.ts';
@@ -7,6 +7,7 @@ import { assignments } from '../../db/schema/assignments.ts';
 import { missionCheckins } from '../../db/schema/mission_checkins.ts';
 import { barterSteps } from '../../db/schema/barter_steps.ts';
 import { missionQuestions, missionQuestionOptions } from '../../db/schema/mission_questions.ts';
+import { users } from '../../db/schema/users.ts';
 import ApiError from '../../utils/ApiError.ts';
 import {
   assertWithinEventWindow,
@@ -143,6 +144,13 @@ export const deleteMission = async (missionId: string) => {
     await db.delete(missionQuestionOptions).where(inArray(missionQuestionOptions.questionId, questionIds));
     await db.delete(missionQuestions).where(inArray(missionQuestions.id, questionIds));
   }
+
+  // Penjaga pos yang ditugaskan ke misi ini kehilangan posnya, bukan akunnya —
+  // kolomnya punya kunci asing ke missions, jadi tanpa ini penghapusan gagal
+  // sebagai galat basis data yang tidak bisa dimengerti panitia.
+  await db.update(users)
+    .set({ assignedMissionId: null, updatedAt: new Date() })
+    .where(eq(users.assignedMissionId, missionId));
 
   await db.delete(missionCheckins).where(eq(missionCheckins.missionId, missionId));
   await db.delete(missions).where(eq(missions.id, missionId));
@@ -518,6 +526,23 @@ export const checkInMission = async (
   if (existing) {
     if (existing.checkedOutAt) throw ApiError.badRequest('Kelompok sudah check-out dari misi ini');
     throw ApiError.badRequest('Kelompok sudah check-in di misi ini');
+  }
+
+  // Satu kelompok hanya boleh berada di satu pos pada satu waktu. Tanpa ini,
+  // kelompok bisa "menitipkan diri" di beberapa pos sekaligus lalu mengerjakan
+  // semuanya belakangan — dan petugas pos pertama menunggu meja yang tidak
+  // akan pernah ditutup.
+  const [openElsewhere] = await db
+    .select({ missionId: missionCheckins.missionId, title: missions.title })
+    .from(missionCheckins)
+    .innerJoin(missions, eq(missions.id, missionCheckins.missionId))
+    .where(and(eq(missionCheckins.groupId, groupId), isNull(missionCheckins.checkedOutAt)))
+    .limit(1);
+
+  if (openElsewhere) {
+    throw ApiError.badRequest(
+      `Kelompok ini masih tercatat di pos "${openElsewhere.title}". Selesaikan dan check-out dari sana dulu.`,
+    );
   }
 
   const id = nanoid(16);

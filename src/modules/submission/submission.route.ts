@@ -12,6 +12,7 @@ router.get('/my-group', submissionController.getMyGroupSubmissions);
 router.get('/pending', submissionController.getPendingSubmissions);
 router.get('/pending/count', submissionController.getPendingCounts);
 router.post('/', validate(submitMissionSchema), submissionController.submitMission);
+router.get('/:submissionId/quiz-review', submissionController.getQuizReview);
 router.put('/:submissionId/validate', validate(validateSubmissionSchema), submissionController.validateSubmission);
 router.get('/barter-steps/:assignmentId', submissionController.getBarterSteps);
 router.post('/barter-steps', submissionController.submitBarterStep);

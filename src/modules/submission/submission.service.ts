@@ -14,7 +14,7 @@ import { assertWithinEventWindow, assertWithinMissionSession } from '../../utils
 import { recalculateGroupScore } from '../../utils/groupScore.ts';
 import { assertCheckedIn } from '../../utils/attendance.ts';
 import { getGatekeeperStatus } from '../mission/mission.service.ts';
-import { gradeAnswers, saveAnswers } from '../mission/question.service.ts';
+import { gradeAnswers, saveAnswers, getSubmissionAnswers } from '../mission/question.service.ts';
 import { calculateMissionPoint } from '../../utils/scoring.ts';
 import { calculateYelYelPoint, isYelYelExpired } from '../../utils/yelYel.ts';
 import { getSettings } from '../settings/settings.service.ts';
@@ -146,21 +146,32 @@ export const submitMission = async (groupId: string, userId: string, data: Submi
 
     const result = await gradeAnswers(data.missionId, data.answers);
 
+    // Isian singkat dinilai panitia, bukan sistem: pencocokan huruf demi huruf
+    // menolak jawaban yang sebenarnya benar. Begitu ada satu saja soal seperti
+    // itu, seluruh kirimannya masuk antrean validasi — poin pilihan gandanya
+    // ikut ditahan supaya kelompok menerima satu nilai utuh, bukan dua kali.
+    const needsReview = result.manualCount > 0;
+
+    const summary = needsReview
+      ? `${result.correctCount} dari ${result.choiceCount} pilihan ganda benar · ` +
+        `${result.manualCount} isian singkat menunggu penilaian panitia`
+      : `${result.correctCount} dari ${result.totalQuestions} jawaban benar`;
+
     await db.transaction(async (tx: any) => {
       await tx.insert(submissions).values({
         id: submissionId,
         missionId: data.missionId,
         groupId,
         submittedBy: userId,
-        answerText: `${result.correctCount} dari ${result.totalQuestions} jawaban benar`,
-        status: 'APPROVED',
-        awardedPoint: result.point,
-        validatedAt: new Date(),
+        answerText: summary,
+        status: needsReview ? 'PENDING' : 'APPROVED',
+        awardedPoint: needsReview ? null : result.point,
+        validatedAt: needsReview ? null : new Date(),
       });
 
       await saveAnswers(tx, submissionId, result.graded);
 
-      if (result.point > 0) {
+      if (!needsReview && result.point > 0) {
         await tx.insert(scoreEntries).values({
           id: nanoid(16),
           groupId,
@@ -175,10 +186,11 @@ export const submitMission = async (groupId: string, userId: string, data: Submi
 
     return {
       id: submissionId,
-      autoGraded: true,
+      autoGraded: !needsReview,
       correctCount: result.correctCount,
       totalQuestions: result.totalQuestions,
-      point: result.point,
+      manualCount: result.manualCount,
+      point: needsReview ? null : result.point,
     };
   }
 
@@ -277,7 +289,11 @@ export const validateSubmission = async (
     const mission = missionRows[0];
     if (!mission) throw ApiError.notFound('Mission not found');
 
-    if (mission.isYelYel) {
+    if (mission.type === 'KUIS') {
+      // Poin pilihan gandanya sudah dihitung sistem dan ditampilkan sebagai
+      // usulan di layar panitia; yang mengikat tetap angka yang mereka kirim.
+      pointsToAward = scoring.awardedPoint ?? 0;
+    } else if (mission.isYelYel) {
       // Yel-yel tidak dinilai dari konfigurasi misi, melainkan dari kapan
       // kelompok mengerjakannya: langsung di checkpoint, ditunda, atau
       // terlambat sama sekali.
@@ -335,6 +351,26 @@ export const validateSubmission = async (
     point: status === 'APPROVED' ? pointsToAward : null,
     rejectReason: status === 'REJECTED' ? (rejectReason ?? null) : null,
   });
+};
+
+/**
+ * Nilai otomatis dari pilihan ganda pada sebuah submission kuis.
+ *
+ * Dipakai sebagai usulan angka di layar validasi: panitia tinggal menambahkan
+ * penilaian isian singkatnya, bukan menghitung ulang semuanya dari awal.
+ */
+export const getQuizReview = async (submissionId: string) => {
+  const answers = await getSubmissionAnswers(submissionId);
+
+  const autoPoint = answers
+    .filter(a => a.type === 'PILIHAN_GANDA' && a.isCorrect)
+    .reduce((sum, a) => sum + a.point, 0);
+
+  const manualPoint = answers
+    .filter(a => a.type === 'ISIAN_SINGKAT')
+    .reduce((sum, a) => sum + a.point, 0);
+
+  return { answers, autoPoint, manualPoint, maxPoint: autoPoint + manualPoint };
 };
 
 export const getBarterSteps = async (groupId: string, assignmentId: string) => {

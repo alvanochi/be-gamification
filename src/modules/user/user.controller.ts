@@ -2,7 +2,7 @@ import type { Request, Response, NextFunction } from 'express';
 import catchAsync from '../../utils/catchAsync.ts';
 import response from '../../utils/response.ts';
 import ApiError from '../../utils/ApiError.ts';
-import { createUser, getUserById, getProfile, updateProfile, saveSocialProfile, checkEmailExists, checkPhoneExists, checkInByQrToken, searchParticipants } from './user.service.ts';
+import { createUser, getUserById, getProfile, updateProfile, saveSocialProfile, checkEmailExists, checkPhoneExists, checkInByQrToken, searchLoginCandidates } from './user.service.ts';
 import { db } from '../../db/index.ts';
 import { users } from '../../db/schema/users.ts';
 import { eq } from 'drizzle-orm';
@@ -107,10 +107,16 @@ export const saveSocialProfileHandler = catchAsync(async (req: Request, res: Res
 });
 
 /**
- * Pencarian nama peserta untuk layar masuk. Terbuka tanpa sesi — peserta belum
- * punya sesi ketika mencari namanya sendiri.
+ * Pencarian nama untuk layar masuk. Terbuka tanpa sesi — yang mencari memang
+ * belum punya sesi.
+ *
+ * `scope=PANITIA` mengembalikan akun panitia, dipakai layar masuk admin;
+ * tanpa itu yang dikembalikan peserta, seperti di kaki beranda. Isinya hanya
+ * nama dan nama usaha — nomor telepon dan email tidak pernah ikut, jadi
+ * daftarnya tidak bisa dipakai untuk apa pun selain memilih diri sendiri.
  */
-export const searchParticipantsHandler = catchAsync(async (req: Request, res: Response) => {
-  const result = await searchParticipants(String(req.query.q ?? ''));
-  response(res, 200, 'Peserta ditemukan', result);
+export const searchLoginCandidatesHandler = catchAsync(async (req: Request, res: Response) => {
+  const scope = String(req.query.scope ?? '').toUpperCase() === 'PANITIA' ? 'PANITIA' : 'PARTICIPANT';
+  const result = await searchLoginCandidates(String(req.query.q ?? ''), scope);
+  response(res, 200, scope === 'PANITIA' ? 'Panitia ditemukan' : 'Peserta ditemukan', result);
 });

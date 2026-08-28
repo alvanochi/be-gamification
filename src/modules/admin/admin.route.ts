@@ -2,6 +2,7 @@ import { Router } from 'express';
 import multer from 'multer';
 import * as adminController from './admin.controller.ts';
 import * as sheetController from './sheet.controller.ts';
+import * as missionSheetController from './mission-sheet.controller.ts';
 
 import authenticate from '../../middlewares/auth.middleware.ts';
 
@@ -58,5 +59,10 @@ router.get('/export/leaderboard', adminController.exportLeaderboard);
 router.get('/sheets/accounts/template', sheetController.downloadAccountTemplate);
 router.get('/sheets/accounts', sheetController.exportAccounts);
 router.post('/sheets/accounts', sheetUpload.single('file'), sheetController.importAccounts);
+
+// Rangkaian misi juga disusun panitia di spreadsheet sebelum acara.
+router.get('/sheets/missions/template', missionSheetController.downloadMissionTemplate);
+router.get('/sheets/missions', missionSheetController.exportMissions);
+router.post('/sheets/missions', sheetUpload.single('file'), missionSheetController.importMissions);
 
 export default router;
