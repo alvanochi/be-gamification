@@ -121,12 +121,18 @@ export const downloadAccountTemplate = catchAsync(async (req: Request, res: Resp
  * agar keduanya tetap sepakat. Kolom Kelompok kini menempel pada barisnya
  * sendiri: mengisinya berarti kelompok itu dibuat dan peserta itu ditempatkan
  * di dalamnya, sekali unggah.
+ *
+ * Kolom "Ketua Kelompok" hanya keterangan, tidak ikut dibaca saat diunggah
+ * kembali. Ketua dipilih anggotanya sendiri lewat voting di Checkpoint 2;
+ * membiarkan sebuah unggahan menggantinya berarti membuka jalan memintas
+ * pemilihan itu tanpa jejak siapa yang melakukannya.
  */
 export const exportAccounts = catchAsync(async (req: Request, res: Response) => {
   await ensureSuperAdmin(req.user?.id as string);
 
   const rows = await db
     .select({
+      id: users.id,
       fullname: users.fullname,
       phoneNumber: users.phoneNumber,
       email: users.email,
@@ -135,6 +141,9 @@ export const exportAccounts = catchAsync(async (req: Request, res: Response) => 
       role: users.role,
       checkInAt: users.checkInAt,
       groupName: groups.name,
+      // Ketua kelompok tercatat di sisi kelompok, bukan di sisi orangnya.
+      // Ikut ditarik supaya barisnya bisa menandai dirinya sendiri.
+      groupLeaderId: groups.leaderId,
     })
     .from(users)
     .leftJoin(groups, eq(groups.id, users.groupId))
@@ -149,12 +158,16 @@ export const exportAccounts = catchAsync(async (req: Request, res: Response) => 
     Peran: r.role,
     Hadir: r.checkInAt ? 'Ya' : 'Belum',
     Kelompok: r.groupName ?? '',
+    // Hanya ketua yang ditandai; anggota lain dibiarkan kosong, bukan diisi
+    // "Tidak". Satu kolom yang mayoritasnya kosong jauh lebih cepat dibaca
+    // panitia yang mencari satu nama di antara dua ratus baris.
+    'Ketua Kelompok': r.groupLeaderId && r.groupLeaderId === r.id ? 'Ya' : '',
   }));
 
   const ws = XLSX.utils.json_to_sheet(sheetRows);
   ws['!cols'] = [
     { wch: 28 }, { wch: 18 }, { wch: 26 }, { wch: 14 }, { wch: 24 },
-    { wch: 14 }, { wch: 10 }, { wch: 20 },
+    { wch: 14 }, { wch: 10 }, { wch: 20 }, { wch: 16 },
   ];
 
   const wb = XLSX.utils.book_new();
