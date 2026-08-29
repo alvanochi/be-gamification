@@ -42,12 +42,16 @@ router.post('/field-results', adminController.submitFieldResult);
 router.post('/submissions', adminController.createManualSubmission);
 /** Membetulkan nilai kiriman yang sudah disetujui, mis. salah ketik saat validasi. */
 router.put('/submissions/:submissionId/score', adminController.updateSubmissionScore);
+/** Meninjau ulang keputusan: mengubah status sekaligus menyelaraskan poinnya. */
+router.put('/submissions/:submissionId/review', adminController.reviewSubmission);
 router.get('/accounts', adminController.listAccounts);
 
 /** Nilai akhir: poin sistem + data media sosial dari pihak eksternal. */
 router.get('/final-scores', finalScoreController.getFinalScores);
 /** Nilai akhir sebagai lembar kerja — rincian lengkapnya, bukan hanya totalnya. */
 router.get('/sheets/final-scores', finalScoreController.exportFinalScores);
+/** Cadangan bagi jalur eksternal: panitia mengetik sendiri angka media sosialnya. */
+router.put('/final-scores/manual', finalScoreController.saveManualSocialScores);
 router.post('/accounts', adminController.createAccount);
 // Rute berjalur tetap harus mendahului yang berparameter, kalau tidak
 // "/accounts/roles" akan tertangkap sebagai userId bernama "roles".

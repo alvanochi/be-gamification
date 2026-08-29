@@ -571,9 +571,120 @@ export const createManualSubmission = catchAsync(async (req: Request, res: Respo
  * pengumuman juara. Endpoint ini mengubah keduanya dalam satu transaksi,
  * lalu menurunkan ulang groups.score dari score_entries.
  */
+/**
+ * Menyelaraskan poin sebuah kiriman dengan keputusannya.
+ *
+ * Nilai kiriman hidup di dua tempat: `submissions.awarded_point` yang tampil
+ * di layar, dan `score_entries.point` yang benar-benar dijumlahkan klasemen.
+ * Setiap perubahan keputusan harus menyentuh keduanya — mengubah satu saja
+ * membuat layar menunjukkan satu angka sementara peringkatnya dihitung dari
+ * angka lain, selisih yang baru ketahuan saat pengumuman juara.
+ *
+ * Dipakai bersama oleh koreksi nilai dan peninjauan ulang status, supaya
+ * aturan rekonsiliasinya hanya ditulis sekali.
+ */
+const syncSubmissionPoint = async (
+    tx: any,
+    submissionId: string,
+    groupId: string,
+    point: number,
+    actorId: string,
+) => {
+    const [entry] = await tx.select({ id: scoreEntries.id }).from(scoreEntries)
+        .where(eq(scoreEntries.referenceId, submissionId)).limit(1);
+
+    if (point > 0) {
+        if (entry) {
+            await tx.update(scoreEntries).set({ point }).where(eq(scoreEntries.id, entry.id));
+        } else {
+            // Kiriman yang dulu bernilai 0 — atau yang dulu ditolak — tidak
+            // meninggalkan score_entry sama sekali, jadi barisnya dibuat.
+            await tx.insert(scoreEntries).values({
+                id: nanoid(16),
+                groupId,
+                source: 'CHALLENGE',
+                referenceId: submissionId,
+                point,
+                createdBy: actorId,
+            });
+        }
+    } else if (entry) {
+        // Nol poin berarti tidak ada yang perlu dijumlahkan. Menyimpan baris
+        // bernilai nol hanya menyisakan jejak yang membingungkan saat ditelusuri.
+        await tx.delete(scoreEntries).where(eq(scoreEntries.id, entry.id));
+    }
+
+    await recalculateGroupScore(tx, groupId);
+};
+
+/**
+ * Meninjau ulang keputusan yang sudah dibuat.
+ *
+ * Validasi biasa hanya boleh sekali: begitu sebuah kiriman diputuskan,
+ * jalurnya tertutup. Itu benar untuk alur normal — tapi keputusan yang keliru
+ * tetap terjadi, dan sebelum ini satu-satunya obatnya adalah UPDATE langsung
+ * ke basis data.
+ *
+ * Endpoint ini menerima keadaan apa pun sebagai titik awal: menunggu, sudah
+ * disetujui, atau sudah ditolak. Yang dijaga bukan urutannya, melainkan
+ * keutuhan angkanya — poin lama dicabut dan poin baru dipasang dalam satu
+ * transaksi, lalu skor kelompok diturunkan ulang dari score_entries.
+ */
+export const reviewSubmission = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    const actorId = req.user?.id as string;
+    await ensureSuperAdmin(actorId);
+
+    const submissionId = req.params.submissionId as string;
+    const { status, awardedPoint, rejectReason } = req.body ?? {};
+
+    if (status !== 'APPROVED' && status !== 'REJECTED') {
+        return next(ApiError.badRequest('status harus APPROVED atau REJECTED'));
+    }
+
+    const point = status === 'APPROVED' ? Number(awardedPoint) : 0;
+    if (status === 'APPROVED' && (!Number.isInteger(point) || point < 0)) {
+        return next(ApiError.badRequest('awardedPoint harus bilangan bulat >= 0'));
+    }
+
+    const [submission] = await db.select().from(submissions)
+        .where(eq(submissions.id, submissionId)).limit(1);
+    if (!submission) return next(ApiError.notFound('Kiriman tidak ditemukan'));
+
+    const now = new Date();
+
+    await db.transaction(async (tx: any) => {
+        await tx.update(submissions)
+            .set({
+                status,
+                awardedPoint: status === 'APPROVED' ? point : null,
+                rejectReason: status === 'REJECTED' ? (rejectReason ? String(rejectReason) : null) : null,
+                validatedBy: actorId,
+                validatedAt: now,
+                updatedAt: now,
+            })
+            .where(eq(submissions.id, submissionId));
+
+        await syncSubmissionPoint(tx, submissionId, submission.groupId, point, actorId);
+    });
+
+    return response(
+        res,
+        200,
+        status === 'APPROVED' ? `Disetujui — ${point} poin berlaku` : 'Ditolak — poinnya dicabut',
+        { submissionId, status, awardedPoint: status === 'APPROVED' ? point : null },
+    );
+});
+
+/**
+ * Membetulkan nilai kiriman yang sudah disetujui.
+ *
+ * Bentuk ringkas dari reviewSubmission untuk kasus yang paling sering terjadi
+ * — salah ketik angka saat validasi — dan dipakai layar Monitoring, yang tidak
+ * punya urusan dengan pengubahan status.
+ */
 export const updateSubmissionScore = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
-    const userId = req.user?.id as string;
-    await ensureSuperAdmin(userId);
+    const actorId = req.user?.id as string;
+    await ensureSuperAdmin(actorId);
 
     const submissionId = req.params.submissionId as string;
     const raw = req.body?.awardedPoint;
@@ -587,8 +698,9 @@ export const updateSubmissionScore = catchAsync(async (req: Request, res: Respon
         .where(eq(submissions.id, submissionId)).limit(1);
     if (!submission) return next(ApiError.notFound('Kiriman tidak ditemukan'));
 
-    // Kiriman yang belum disetujui tidak punya nilai untuk dibetulkan —
-    // yang dibutuhkannya validasi biasa, bukan koreksi.
+    // Kiriman yang belum disetujui tidak punya nilai untuk dibetulkan — yang
+    // dibutuhkannya validasi, bukan koreksi. Untuk mengubah keputusannya,
+    // pakai reviewSubmission.
     if (submission.status !== 'APPROVED') {
         return next(ApiError.badRequest('Hanya kiriman yang sudah disetujui yang bisa dibetulkan nilainya'));
     }
@@ -598,25 +710,7 @@ export const updateSubmissionScore = catchAsync(async (req: Request, res: Respon
             .set({ awardedPoint: point, updatedAt: new Date() })
             .where(eq(submissions.id, submissionId));
 
-        // Kiriman yang dulu bernilai 0 tidak meninggalkan score_entry sama
-        // sekali, jadi barisnya dibuat bila memang belum ada.
-        const [entry] = await tx.select({ id: scoreEntries.id }).from(scoreEntries)
-            .where(eq(scoreEntries.referenceId, submissionId)).limit(1);
-
-        if (entry) {
-            await tx.update(scoreEntries).set({ point }).where(eq(scoreEntries.id, entry.id));
-        } else if (point > 0) {
-            await tx.insert(scoreEntries).values({
-                id: nanoid(16),
-                groupId: submission.groupId,
-                source: 'CHALLENGE',
-                referenceId: submissionId,
-                point,
-                createdBy: userId,
-            });
-        }
-
-        await recalculateGroupScore(tx, submission.groupId);
+        await syncSubmissionPoint(tx, submissionId, submission.groupId, point, actorId);
     });
 
     return response(res, 200, `Nilai diperbarui menjadi ${point} poin`, {

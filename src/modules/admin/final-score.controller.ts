@@ -1,13 +1,18 @@
-import type { Request, Response } from 'express';
+import type { Request, Response, NextFunction } from 'express';
 import * as XLSX from 'xlsx';
-import { sql } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { db } from '../../db/index.ts';
+import { users } from '../../db/schema/users.ts';
+import { groups } from '../../db/schema/groups.ts';
+import ApiError from '../../utils/ApiError.ts';
 import catchAsync from '../../utils/catchAsync.ts';
 import response from '../../utils/response.ts';
-import { ensureAdmin } from '../../utils/roles.ts';
+import { ensureAdmin, ensureSuperAdmin } from '../../utils/roles.ts';
 import {
   MISSION_WEIGHT,
   ENGAGEMENT_WEIGHT,
+  PLATFORM_COLUMNS,
+  SOCIAL_PLATFORMS,
   computeFinalScore,
   normaliseHandle,
 } from '../../utils/finalScore.ts';
@@ -61,7 +66,7 @@ const buildFinalScoreBoard = async () => {
   // untuk layar yang disegarkan berkali-kali menjelang pengumuman.
   const members = (
     await db.execute(sql`
-      SELECT u.group_id AS "groupId", u.fullname,
+      SELECT u.id AS "userId", u.group_id AS "groupId", u.fullname,
              u.instagram_account AS "instagram",
              u.tiktok_account    AS "tiktok",
              u.youtube_account   AS "youtube",
@@ -73,6 +78,7 @@ const buildFinalScoreBoard = async () => {
       ORDER BY u.fullname
     `)
   ).rows as Array<{
+    userId: string;
     groupId: string;
     fullname: string;
     instagram: string | null;
@@ -98,6 +104,9 @@ const buildFinalScoreBoard = async () => {
     members: members
       .filter(m => m.groupId === row.groupId)
       .map(m => ({
+        // Dipakai layar input manual sebagai sasaran penyimpanan; mencocokkan
+        // lewat nama akan pecah begitu ada dua peserta bernama sama.
+        userId: m.userId,
         fullname: m.fullname,
         // Rinci per platform supaya panitia bisa menunjuk angka mana yang
         // belum masuk, bukan hanya melihat totalnya yang terasa kekecilan.
@@ -133,6 +142,101 @@ export const getFinalScores = catchAsync(async (req: Request, res: Response) => 
   await ensureAdmin(req.user?.id as string);
   return response(res, 200, 'Nilai akhir', await buildFinalScoreBoard());
 });
+
+/**
+ * Menyimpan angka media sosial secara manual.
+ *
+ * Cadangan bagi jalur /api/external. Pihak yang memantau media sosial belum
+ * tentu sempat — atau mampu — menyambungkan sistemnya sebelum hari-H, dan
+ * nilai akhir tidak boleh bergantung pada integrasi yang mungkin tidak pernah
+ * jadi. Panitia bisa mengetiknya sendiri dari rekap apa pun yang mereka punya.
+ *
+ * Menulis ke kolom yang sama persis dengan jalur eksternal, jadi keduanya
+ * boleh dipakai bergantian: yang terakhir menulis yang berlaku. Tidak ada
+ * kolom "sumber" yang dibedakan — dua tempat penyimpanan untuk satu angka
+ * hanya akan melahirkan pertanyaan mana yang benar.
+ *
+ * Satu panggilan menangani satu kelompok: nett-nya dan postingan seluruh
+ * anggotanya sekaligus. Menyimpan per kelompok membuat panitia bisa
+ * mengerjakannya sepotong-sepotong tanpa takut kehilangan yang sudah diketik.
+ */
+export const saveManualSocialScores = catchAsync(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const actorId = req.user?.id as string;
+    await ensureSuperAdmin(actorId);
+
+    const { groupId, nett, members } = req.body ?? {};
+    if (!groupId) return next(ApiError.badRequest('groupId wajib diisi'));
+
+    const [group] = await db
+      .select({ id: groups.id, name: groups.name })
+      .from(groups)
+      .where(eq(groups.id, String(groupId)))
+      .limit(1);
+
+    if (!group) return next(ApiError.notFound('Kelompok tidak ditemukan'));
+
+    const now = new Date();
+    const asCount = (value: unknown) => {
+      if (value === undefined || value === null || value === '') return null;
+      const n = Number(value);
+      return Number.isInteger(n) && n >= 0 ? n : undefined;
+    };
+
+    // Diperiksa seluruhnya sebelum satu pun ditulis: separuh tersimpan lalu
+    // ditolak di tengah adalah keadaan yang paling sulit dibereskan panitia.
+    const rows = Array.isArray(members) ? members : [];
+    const patches: Array<{ userId: string; values: Record<string, number> }> = [];
+
+    for (const raw of rows) {
+      const item = raw as Record<string, unknown>;
+      const userId = String(item.userId ?? '');
+      if (!userId) return next(ApiError.badRequest('Setiap anggota harus menyebut userId'));
+
+      const values: Record<string, number> = {};
+      for (const platform of SOCIAL_PLATFORMS) {
+        const count = asCount(item[platform]);
+        if (count === undefined) {
+          return next(
+            ApiError.badRequest(`Jumlah postingan ${platform} harus bilangan bulat >= 0`),
+          );
+        }
+        if (count !== null) values[PLATFORM_COLUMNS[platform].count] = count;
+      }
+
+      if (Object.keys(values).length) patches.push({ userId, values });
+    }
+
+    const nettValue = nett === undefined || nett === null || nett === '' ? null : Number(nett);
+    if (nettValue !== null && (!Number.isFinite(nettValue) || nettValue < 0)) {
+      return next(ApiError.badRequest('Nett likes & share harus angka >= 0'));
+    }
+
+    await db.transaction(async (tx: any) => {
+      if (nettValue !== null) {
+        await tx
+          .update(groups)
+          .set({ externalNett: nettValue, externalNettAt: now, updatedAt: now })
+          .where(eq(groups.id, group.id));
+      }
+
+      for (const patch of patches) {
+        await tx
+          .update(users)
+          .set({ ...patch.values, socialPostCountAt: now, updatedAt: now })
+          // group_id ikut disyaratkan: tanpa itu, userId yang salah ketik bisa
+          // menaruh angka pada peserta dari kelompok lain sama sekali.
+          .where(and(eq(users.id, patch.userId), eq(users.groupId, group.id)));
+      }
+    });
+
+    return response(res, 200, `Nilai ${group.name} tersimpan`, {
+      groupId: group.id,
+      members: patches.length,
+      nettUpdated: nettValue !== null,
+    });
+  },
+);
 
 /** "24 Agustus 2026 14.05 WIB" — jam acara, bukan jam mesin. */
 const stampWib = (value: Date | string | null) =>
