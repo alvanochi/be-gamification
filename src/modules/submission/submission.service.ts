@@ -1,4 +1,5 @@
 import { eq, and, desc, sql } from 'drizzle-orm';
+import { alias } from 'drizzle-orm/pg-core';
 import { nanoid } from 'nanoid';
 import { db } from '../../db/index.ts';
 import { submissions } from '../../db/schema/submissions.ts';
@@ -221,9 +222,15 @@ export const submitMission = async (groupId: string, userId: string, data: Submi
   return { id: submissionId };
 };
 
-export const getPendingSubmissions = async () => {
-  return await db
-    .select({
+/**
+ * Kolom yang dibutuhkan layar validasi.
+ *
+ * Dipakai bersama oleh antrean (yang menunggu saja) dan riwayat (semuanya),
+ * supaya kartu yang sudah divalidasi tampil dengan keterangan yang sama
+ * persis seperti saat ia masih menunggu — bukan versi ringkas yang membuat
+ * panitia harus mengingat-ingat apa yang dulu ia lihat.
+ */
+const submissionColumns = {
       id: submissions.id,
       status: submissions.status,
       mediaUrls: submissions.mediaUrls,
@@ -252,13 +259,111 @@ export const getPendingSubmissions = async () => {
       groupName: groups.name,
       submittedById: users.id,
       submittedByName: users.fullname,
-    })
+} as const;
+
+export const getPendingSubmissions = async () => {
+  return await db
+    .select(submissionColumns)
     .from(submissions)
     .innerJoin(missions, eq(submissions.missionId, missions.id))
     .innerJoin(groups, eq(submissions.groupId, groups.id))
     .innerJoin(users, eq(submissions.submittedBy, users.id))
     .where(eq(submissions.status, 'PENDING'))
     .orderBy(submissions.createdAt);
+};
+
+/**
+ * Seluruh kiriman, apa pun statusnya.
+ *
+ * Antrean validasi selama ini hanya memperlihatkan yang menunggu, jadi begitu
+ * sebuah bukti disetujui atau ditolak ia lenyap dari layar. Panitia yang
+ * ditanya "kelompok kami tadi diterima atau tidak?" tidak punya tempat untuk
+ * melihatnya, dan yang ditolak pun tidak bisa ditelusuri alasannya.
+ *
+ * Verifikator ikut dikirim: keputusan yang bisa ditelusuri siapa pembuatnya
+ * jauh lebih mudah dipertanggungjawabkan daripada keputusan tanpa nama.
+ */
+export const getAllSubmissions = async () => {
+  const validator = alias(users, 'validator');
+
+  return await db
+    .select({
+      ...submissionColumns,
+      awardedPoint: submissions.awardedPoint,
+      rejectReason: submissions.rejectReason,
+      validatedAt: submissions.validatedAt,
+      validatedByName: validator.fullname,
+    })
+    .from(submissions)
+    .innerJoin(missions, eq(submissions.missionId, missions.id))
+    .innerJoin(groups, eq(submissions.groupId, groups.id))
+    .innerJoin(users, eq(submissions.submittedBy, users.id))
+    .leftJoin(validator, eq(submissions.validatedBy, validator.id))
+    .orderBy(desc(submissions.createdAt));
+};
+
+/**
+ * Rantai Bigger Better yang belum ditutup panitia.
+ *
+ * Barter tidak meninggalkan submission, jadi ia tidak pernah muncul di layar
+ * validasi — dan kelompok yang rantainya masih berjalan terlihat seolah belum
+ * mengerjakan apa pun. Ringkasan ini menjawab pertanyaan yang selalu muncul
+ * menjelang penutupan: "kenapa Bigger Better kami belum ada nilainya?"
+ *
+ * Jawabannya hampir selalu sama: tombol Akhiri belum ditekan. Poin barter
+ * memang sudah masuk per langkah yang disetujui, tetapi rantainya baru
+ * dianggap selesai setelah panitia menutupnya.
+ */
+export const getOpenBarterChains = async () => {
+  const rows = await db
+    .select({
+      assignmentId: assignments.id,
+      status: assignments.status,
+      missionTitle: missions.title,
+      groupName: groups.name,
+      stepStatus: barterSteps.status,
+      stepPoint: barterSteps.awardedPoint,
+    })
+    .from(assignments)
+    .innerJoin(missions, eq(assignments.missionId, missions.id))
+    .innerJoin(groups, eq(assignments.groupId, groups.id))
+    .leftJoin(barterSteps, eq(barterSteps.assignmentId, assignments.id))
+    .where(eq(missions.type, 'BIGGER_BETTER'));
+
+  const byAssignment = new Map<
+    string,
+    {
+      assignmentId: string;
+      groupName: string;
+      missionTitle: string;
+      status: string;
+      approvedSteps: number;
+      pendingSteps: number;
+      earnedPoint: number;
+    }
+  >();
+
+  for (const row of rows) {
+    const entry = byAssignment.get(row.assignmentId) ?? {
+      assignmentId: row.assignmentId,
+      groupName: row.groupName,
+      missionTitle: row.missionTitle,
+      status: row.status,
+      approvedSteps: 0,
+      pendingSteps: 0,
+      earnedPoint: 0,
+    };
+
+    if (row.stepStatus === 'APPROVED') {
+      entry.approvedSteps += 1;
+      entry.earnedPoint += row.stepPoint ?? 0;
+    }
+    if (row.stepStatus === 'PENDING') entry.pendingSteps += 1;
+
+    byAssignment.set(row.assignmentId, entry);
+  }
+
+  return [...byAssignment.values()].sort((a, b) => a.groupName.localeCompare(b.groupName, 'id'));
 };
 
 /**

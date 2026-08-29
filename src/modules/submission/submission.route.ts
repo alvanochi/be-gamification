@@ -10,6 +10,8 @@ router.use(authenticate);
 
 router.get('/my-group', submissionController.getMyGroupSubmissions);
 router.get('/pending', submissionController.getPendingSubmissions);
+/** Seluruh kiriman beserta keputusannya — layar validasi memakainya untuk transparansi. */
+router.get('/history', submissionController.getSubmissionHistory);
 router.get('/pending/count', submissionController.getPendingCounts);
 router.post('/', validate(submitMissionSchema), submissionController.submitMission);
 router.get('/:submissionId/quiz-review', submissionController.getQuizReview);

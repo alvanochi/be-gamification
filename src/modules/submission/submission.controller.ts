@@ -35,6 +35,31 @@ export const submitMission = catchAsync(async (req: Request, res: Response) => {
   response(res, 201, 'Mission submitted successfully', result);
 });
 
+/**
+ * Riwayat lengkap: seluruh kiriman apa pun statusnya, plus ringkasan rantai
+ * Bigger Better yang tidak meninggalkan kiriman sama sekali.
+ *
+ * Dipakai layar validasi untuk memperlihatkan yang sudah diterima dan ditolak,
+ * bukan hanya yang masih menunggu — supaya keputusan panitia bisa ditelusuri
+ * siapa pun, bukan hilang begitu tombolnya ditekan.
+ */
+export const getSubmissionHistory = catchAsync(async (req: Request, res: Response) => {
+  // Penjagaan yang sama dengan antrean validasi di bawah: riwayat ini memuat
+  // nama peserta dan keputusan panitia, bukan bacaan untuk peserta.
+  const userId = req.user?.id as string;
+  const user = await db.select().from(users).where(eq(users.id, userId)).limit(1);
+  if (!user.length || (user[0].role !== 'ADMIN' && user[0].role !== 'SUPER_ADMIN')) {
+    throw ApiError.forbidden('Only ADMIN or SUPER_ADMIN can view the validation history');
+  }
+
+  const [submissionsAll, barterChains] = await Promise.all([
+    submissionService.getAllSubmissions(),
+    submissionService.getOpenBarterChains(),
+  ]);
+
+  return response(res, 200, 'Riwayat validasi', { submissions: submissionsAll, barterChains });
+});
+
 export const getPendingSubmissions = catchAsync(async (req: Request, res: Response) => {
   const userId = req.user?.id as string;
   const user = await db.select().from(users).where(eq(users.id, userId)).limit(1);
