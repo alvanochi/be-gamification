@@ -56,6 +56,7 @@ export const createMission = async (data: CreateMissionInput) => {
     clueType: data.clueType,
     clue: data.clue,
     clueImages: data.clueImages ?? [],
+    allowMultipleSubmissions: data.allowMultipleSubmissions ?? false,
     locationName: data.locationName,
     sessionStart: data.sessionStart,
     sessionEnd: data.sessionEnd,
@@ -293,6 +294,9 @@ export const getMissionBoard = async (groupId: string, query: MissionBoardQuery)
       missionId: submissions.missionId,
       status: submissions.status,
       createdAt: submissions.createdAt,
+      // Dipakai merekap perolehan misi berulang: peserta perlu tahu berapa
+      // temuannya yang sudah bernilai, bukan sekadar berapa yang disetujui.
+      awardedPoint: submissions.awardedPoint,
     })
     .from(submissions)
     .where(eq(submissions.groupId, groupId));
@@ -335,6 +339,16 @@ export const getMissionBoard = async (groupId: string, query: MissionBoardQuery)
       } else {
         status = 'BELUM';
       }
+    } else if (mission.allowMultipleSubmissions) {
+      /*
+       * Misi berulang tidak pernah "selesai" selama acaranya berjalan —
+       * selalu ada satu Agus lagi yang bisa ditemukan. Menandainya SELESAI
+       * setelah kiriman pertama disetujui akan membuangnya dari daftar
+       * "belum dikerjakan", padahal justru di situlah tempatnya.
+       */
+      status = groupSubmissions.some(s => s.missionId === mission.id && s.status === 'PENDING')
+        ? 'MENUNGGU'
+        : 'BELUM';
     } else if (!latest || latest.status === 'REJECTED') {
       // Bukti yang ditolak berarti misinya terbuka lagi.
       status = 'BELUM';
@@ -362,6 +376,16 @@ export const getMissionBoard = async (groupId: string, query: MissionBoardQuery)
       groupStatus: status,
       /** Terkunci: judulnya tampil, isinya belum bisa dibuka peserta. */
       locked,
+
+      // Rekap kiriman kelompok untuk misi ini. Berarti bagi misi berulang:
+      // peserta perlu tahu berapa temuannya yang sudah bernilai sebelum
+      // memutuskan mengirim lagi.
+      approvedCount: groupSubmissions.filter(
+        s => s.missionId === mission.id && s.status === 'APPROVED',
+      ).length,
+      earnedPoint: groupSubmissions
+        .filter(s => s.missionId === mission.id && s.status === 'APPROVED')
+        .reduce((sum, s) => sum + (s.awardedPoint ?? 0), 0),
       urgent,
       minutesToSessionEnd,
       /** Rantai barter yang sudah ditutup panitia tidak bisa dilanjutkan lagi. */

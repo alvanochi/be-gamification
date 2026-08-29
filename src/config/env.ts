@@ -28,6 +28,11 @@ const envSchema = Joi.object({
     EVENT_WINDOW_END: Joi.string().pattern(/^\d{2}:\d{2}$/).optional(),
     // Offset zona waktu acara terhadap UTC, dalam jam. Yogyakarta = WIB = 7.
     EVENT_TIMEZONE_OFFSET: Joi.number().default(7),
+
+    // Kunci bersama untuk pihak eksternal yang mengirim data media sosial.
+    // Sengaja tidak wajib: server tetap menyala tanpa itu, hanya jalur
+    // /api/external yang menolak seluruh permintaan sampai kuncinya dipasang.
+    EXTERNAL_API_KEY: Joi.string().min(16).optional(),
 }).unknown(true);
 
 const { error, value } = envSchema.validate(process.env);
@@ -55,6 +60,7 @@ const env = value as {
     EVENT_WINDOW_START?: string;
     EVENT_WINDOW_END?: string;
     EVENT_TIMEZONE_OFFSET: number;
+    EXTERNAL_API_KEY?: string;
 };
 
 export default env;

@@ -52,6 +52,9 @@ const missionBody = z.object({
     // Foto pendamping petunjuk. Boleh berdampingan dengan `clue`: misi
     // "foto di titik berikut ini" memberi kalimat perintahnya lalu fotonya.
     clueImages: z.array(z.string().url()).max(10).optional(),
+    // Misi kumpulan (mis. "cari sepuluh orang bernama Agus") boleh dikirim
+    // berkali-kali; tiap kiriman divalidasi dan bernilai sendiri.
+    allowMultipleSubmissions: z.boolean().optional(),
     locationName: z.string().max(255).optional(),
     // "HH:MM" — jam lokal acara, bukan timestamp; lihat komentar di skema.
     sessionStart: z.string().regex(/^\d{2}:\d{2}$/, 'Format sesi harus HH:MM').optional(),

@@ -1,4 +1,4 @@
-import { pgTable, varchar, timestamp, integer, jsonb } from 'drizzle-orm/pg-core';
+import { pgTable, varchar, timestamp, integer, jsonb, doublePrecision } from 'drizzle-orm/pg-core';
 import { users } from './users.ts';
 
 export const groups = pgTable('groups', {
@@ -31,6 +31,12 @@ export const groups = pgTable('groups', {
   // Calon yang tersisa untuk putaran kedua pemilihan ketua. Kosong berarti
   // seluruh anggota masih boleh dipilih.
   runoffCandidateIds: jsonb('runoff_candidate_ids').$type<string[] | null>(),
+
+  // Nett likes & share, dikirim pihak eksternal yang memantau media sosial.
+  // Sudah dibobot di sisi mereka, jadi disimpan apa adanya dan langsung
+  // ditambahkan ke nilai akhir — lihat src/utils/finalScore.ts.
+  externalNett: doublePrecision('external_nett').default(0).notNull(),
+  externalNettAt: timestamp('external_nett_at', { withTimezone: true }),
 
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),

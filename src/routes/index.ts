@@ -12,6 +12,7 @@ import categoryRoutes from '../modules/category/category.route.ts';
 import uploadRoutes from '../modules/upload/upload.route.ts';
 
 import adminRoutes from '../modules/admin/admin.route.ts';
+import externalRoutes from '../modules/external/external.route.ts';
 
 const router = Router();
 
@@ -26,5 +27,7 @@ router.use('/settings', settingsRoutes);
 router.use('/group-categories', categoryRoutes);
 router.use('/uploads', uploadRoutes);
 router.use('/admin', adminRoutes);
+// Dijaga kunci bersama, bukan sesi login — lihat external.route.ts.
+router.use('/external', externalRoutes);
 
 export default router;

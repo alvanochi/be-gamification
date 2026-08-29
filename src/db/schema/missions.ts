@@ -90,6 +90,12 @@ export const missions = pgTable('missions', {
   // Misi TERSTRUKTUR mewajibkan lapor ke petugas pos lewat check-in online.
   requiresCheckIn: boolean('requires_check_in').default(false).notNull(),
 
+  // Misi yang bukan satu tugas melainkan kumpulan — mis. "cari sepuluh orang
+  // bernama Agus" — boleh dikirim berkali-kali. Tiap kiriman tetap divalidasi
+  // sendiri dan poinnya dijumlahkan; yang dilepas hanya larangan mengirim
+  // lagi setelah ada yang disetujui.
+  allowMultipleSubmissions: boolean('allow_multiple_submissions').default(false).notNull(),
+
   // Panitia yang menjaga pos ini. Satu misi satu penjaga; satu penjaga boleh
   // memegang beberapa misi — di lembar panitia hal itu ditulis dengan
   // me-merge sel PETUGAS ke beberapa baris sekaligus.

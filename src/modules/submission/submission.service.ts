@@ -111,15 +111,28 @@ export const submitMission = async (groupId: string, userId: string, data: Submi
   // Satu bukti per kelompok. Yang membacanya peserta di tengah lapangan —
   // biasanya orang kedua yang menekan kirim tanpa tahu temannya sudah
   // mengirim duluan — jadi pesannya menyebut keadaannya, bukan istilah sistem.
-  const pendingSubmission = existing.find((s: any) => s.status === 'PENDING');
-  if (pendingSubmission) {
-    throw ApiError.badRequest(
-      'Bukti misi ini sudah dikirim anggota kelompokmu dan sedang menunggu validasi panitia.',
-    );
-  }
-  const approvedSubmission = existing.find((s: any) => s.status === 'APPROVED');
-  if (approvedSubmission) {
-    throw ApiError.badRequest('Misi ini sudah selesai dan poinnya sudah masuk untuk kelompokmu.');
+  /*
+   * Misi berulang melewati larangan ini sepenuhnya.
+   *
+   * "Cari sepuluh orang bernama Agus" ditemukan satu per satu sepanjang hari.
+   * Menahan kiriman kedua sampai yang pertama selesai divalidasi berarti
+   * kelompok menunggu panitia di tengah perburuan; menahannya setelah ada yang
+   * disetujui berarti sembilan temuan berikutnya tidak pernah bisa masuk.
+   *
+   * Yang tidak berubah: tiap kiriman tetap divalidasi sendiri dan poinnya
+   * tetap lahir dari score_entries-nya masing-masing.
+   */
+  if (!mission[0].allowMultipleSubmissions) {
+    const pendingSubmission = existing.find((s: any) => s.status === 'PENDING');
+    if (pendingSubmission) {
+      throw ApiError.badRequest(
+        'Bukti misi ini sudah dikirim anggota kelompokmu dan sedang menunggu validasi panitia.',
+      );
+    }
+    const approvedSubmission = existing.find((s: any) => s.status === 'APPROVED');
+    if (approvedSubmission) {
+      throw ApiError.badRequest('Misi ini sudah selesai dan poinnya sudah masuk untuk kelompokmu.');
+    }
   }
 
   if (mission[0].type === 'SOAL_LOKASI' && mission[0].geoLat && mission[0].geoLng && mission[0].geoRadius) {

@@ -145,6 +145,7 @@ const COLUMNS = [
   'Waktu Acuan (detik)',
   'Wajib',
   'Wajib Check-in',
+  'Boleh Berulang',
   'Yel-Yel',
 ] as const;
 
@@ -153,7 +154,7 @@ const COL_WIDTHS = [
   { wch: 18 }, { wch: 24 }, { wch: 16 }, { wch: 12 }, { wch: 12 }, { wch: 14 },
   { wch: 16 }, { wch: 34 }, { wch: 40 }, { wch: 14 }, { wch: 14 }, { wch: 14 },
   { wch: 20 }, { wch: 10 }, { wch: 10 }, { wch: 14 }, { wch: 12 },
-  { wch: 18 }, { wch: 10 }, { wch: 16 }, { wch: 10 },
+  { wch: 18 }, { wch: 10 }, { wch: 16 }, { wch: 16 }, { wch: 10 },
 ];
 
 /** Radius geofence bawaan bila panitia tidak menyebutnya sendiri. */
@@ -461,6 +462,7 @@ export const exportMissions = catchAsync(async (req: Request, res: Response) => 
     'Waktu Acuan (detik)': m.timeTargetSeconds ?? '',
     Wajib: m.isMandatory ? 'Ya' : 'Tidak',
     'Wajib Check-in': m.requiresCheckIn ? 'Ya' : 'Tidak',
+    'Boleh Berulang': m.allowMultipleSubmissions ? 'Ya' : 'Tidak',
     'Yel-Yel': m.isYelYel ? 'Ya' : 'Tidak',
   }));
 
@@ -627,6 +629,8 @@ export const importMissions = catchAsync(async (req: Request, res: Response, nex
       timeTargetSeconds,
       isMandatory: asBool(pick(rawRow, 'Wajib')),
       requiresCheckIn: isPost,
+      // Misi kumpulan: boleh dikirim berkali-kali, tiap kiriman dinilai sendiri.
+      allowMultipleSubmissions: asBool(pick(rawRow, 'Boleh Berulang')),
       isYelYel: asBool(pick(rawRow, 'Yel-Yel')),
       updatedAt: new Date(),
     };

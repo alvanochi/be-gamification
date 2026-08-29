@@ -1,4 +1,4 @@
-import { pgTable, varchar, timestamp, boolean, pgEnum } from 'drizzle-orm/pg-core';
+import { pgTable, varchar, timestamp, boolean, integer, pgEnum } from 'drizzle-orm/pg-core';
 import { groups } from './groups.ts';
 
 /**
@@ -35,4 +35,14 @@ export const users = pgTable('users', {
   // membedakan keduanya karena penilaian media sosial bergantung padanya.
   socialProfileAt: timestamp('social_profile_at', { withTimezone: true }),
   socialProfileSkipped: boolean('social_profile_skipped').default(false).notNull(),
+
+  // Jumlah postingan peserta ini, dikirim pihak eksternal yang memantau media
+  // sosial dan dicocokkan lewat username di atas. Dipisah per platform karena
+  // pemantauannya berjalan sendiri-sendiri dan dikirim di waktu berbeda —
+  // satu kolom bersama berarti kiriman TikTok menimpa angka Instagram.
+  // Totalnya dijumlahkan saat dibaca; lihat src/utils/finalScore.ts.
+  socialPostInstagram: integer('social_post_instagram').default(0).notNull(),
+  socialPostTiktok: integer('social_post_tiktok').default(0).notNull(),
+  socialPostYoutube: integer('social_post_youtube').default(0).notNull(),
+  socialPostCountAt: timestamp('social_post_count_at', { withTimezone: true }),
 });
