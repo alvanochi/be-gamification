@@ -36,6 +36,11 @@ router.get('/monitoring', adminController.getMonitoring);
 router.get('/monitoring/missions', adminController.getMissionMonitoring);
 router.get('/monitoring/:groupId', adminController.getGroupDetail);
 router.post('/field-results', adminController.submitFieldResult);
+
+/** Kirim bukti misi atas nama peserta — jalur pemulihan milik Super Admin. */
+router.post('/submissions', adminController.createManualSubmission);
+/** Membetulkan nilai kiriman yang sudah disetujui, mis. salah ketik saat validasi. */
+router.put('/submissions/:submissionId/score', adminController.updateSubmissionScore);
 router.get('/accounts', adminController.listAccounts);
 router.post('/accounts', adminController.createAccount);
 // Rute berjalur tetap harus mendahului yang berparameter, kalau tidak

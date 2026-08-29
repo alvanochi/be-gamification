@@ -432,6 +432,199 @@ export const validateBarterStep = catchAsync(async (req: Request, res: Response,
     );
 });
 
+/**
+ * Mengirim bukti misi atas nama sebuah kelompok.
+ *
+ * Jalur pemulihan, bukan jalur biasa. Di lapangan selalu ada kelompok yang
+ * kehilangan buktinya karena sesuatu di luar kendalinya: ponsel mati saat
+ * mengunggah, sesi misi keburu tutup sementara mereka sudah mengerjakannya,
+ * atau petugas terlanjur men-check-out sebelum buktinya terkirim. Sebelum ini
+ * satu-satunya obatnya adalah INSERT langsung ke basis data.
+ *
+ * Seluruh gerbang yang berlaku bagi peserta sengaja dilewati di sini — jendela
+ * waktu acara, sesi misi, gerbang misi wajib, syarat check-in. Justru gerbang
+ * itulah yang biasanya menjadi sebab kelompoknya terjebak; menegakkannya lagi
+ * di jalur pemulihan berarti jalur ini tidak pernah bisa dipakai untuk hal
+ * yang membuatnya ada.
+ *
+ * Yang TIDAK dilewati adalah larangan ganda: satu kelompok tetap tidak boleh
+ * punya dua bukti aktif untuk satu misi. Itu bukan aturan permainan melainkan
+ * penjaga keutuhan angka — dua bukti berarti dua kali poin, dan klasemen yang
+ * tidak bisa dijelaskan ke siapa pun.
+ */
+export const createManualSubmission = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    const actorId = req.user?.id as string;
+    await ensureSuperAdmin(actorId);
+
+    const { userId, missionId, answerText, mediaUrls, approve, awardedPoint } = req.body ?? {};
+
+    if (!userId || !missionId) {
+        return next(ApiError.badRequest('userId dan missionId wajib diisi'));
+    }
+
+    const [participant] = await db
+        .select({ id: users.id, fullname: users.fullname, role: users.role, groupId: users.groupId })
+        .from(users)
+        .where(eq(users.id, String(userId)))
+        .limit(1);
+
+    if (!participant) return next(ApiError.notFound('Peserta tidak ditemukan'));
+    if (participant.role !== 'PARTICIPANT') {
+        return next(ApiError.badRequest('Bukti hanya bisa dikirim atas nama peserta, bukan panitia'));
+    }
+    if (!participant.groupId) {
+        return next(ApiError.badRequest(`${participant.fullname} belum tergabung dalam kelompok`));
+    }
+
+    const [mission] = await db.select().from(missions).where(eq(missions.id, String(missionId))).limit(1);
+    if (!mission) return next(ApiError.notFound('Misi tidak ditemukan'));
+
+    // Bukti kedua untuk misi yang sama berarti poinnya masuk dua kali.
+    const [existing] = await db
+        .select({ id: submissions.id, status: submissions.status })
+        .from(submissions)
+        .where(and(
+            eq(submissions.missionId, mission.id),
+            eq(submissions.groupId, participant.groupId),
+            inArray(submissions.status, ['PENDING', 'APPROVED']),
+        ))
+        .limit(1);
+
+    if (existing) {
+        return next(ApiError.conflict(
+            existing.status === 'APPROVED'
+                ? 'Kelompok ini sudah menyelesaikan misi tersebut. Betulkan nilainya lewat Monitoring, atau batalkan dulu kirimannya.'
+                : 'Kelompok ini sudah punya bukti yang menunggu validasi untuk misi tersebut.',
+        ));
+    }
+
+    const urls = Array.isArray(mediaUrls) ? mediaUrls.filter((u: unknown) => typeof u === 'string') : [];
+    const text = answerText ? String(answerText).trim() : null;
+
+    if (!urls.length && !text) {
+        return next(ApiError.badRequest('Sertakan bukti: unggah berkas, atau tulis keterangannya'));
+    }
+
+    const shouldApprove = approve === true;
+    const point = Number(awardedPoint);
+
+    if (shouldApprove && (!Number.isInteger(point) || point < 0)) {
+        return next(ApiError.badRequest('Isi nilai yang diberikan bila langsung disetujui'));
+    }
+
+    const submissionId = nanoid(16);
+    const now = new Date();
+
+    await db.transaction(async (tx: any) => {
+        await tx.insert(submissions).values({
+            id: submissionId,
+            missionId: mission.id,
+            groupId: participant.groupId as string,
+            // Tercatat atas nama pesertanya, bukan atas nama panitia yang
+            // mengetikkannya — itu memang yang terjadi di lapangan. Jejak
+            // panitianya tersimpan di validated_by bila langsung disetujui.
+            submittedBy: participant.id,
+            status: shouldApprove ? 'APPROVED' : 'PENDING',
+            mediaUrls: urls,
+            answerText: text,
+            awardedPoint: shouldApprove ? point : null,
+            validatedBy: shouldApprove ? actorId : null,
+            validatedAt: shouldApprove ? now : null,
+        });
+
+        if (shouldApprove && point > 0) {
+            await tx.insert(scoreEntries).values({
+                id: nanoid(16),
+                groupId: participant.groupId as string,
+                source: 'CHALLENGE',
+                referenceId: submissionId,
+                point,
+                createdBy: actorId,
+            });
+            await recalculateGroupScore(tx, participant.groupId as string);
+        }
+    });
+
+    return response(
+        res,
+        201,
+        shouldApprove
+            ? `Bukti ${mission.title} tercatat untuk ${participant.fullname} — ${point} poin masuk`
+            : `Bukti ${mission.title} tercatat atas nama ${participant.fullname}, menunggu validasi`,
+        { submissionId, status: shouldApprove ? 'APPROVED' : 'PENDING' },
+    );
+});
+
+/**
+ * Membetulkan nilai sebuah kiriman yang sudah disetujui.
+ *
+ * Salah ketik saat validasi terjadi di lapangan — "3080" alih-alih "308" —
+ * dan sampai sekarang satu-satunya jalan memperbaikinya adalah UPDATE
+ * langsung ke basis data. Yang berbahaya dari itu bukan perintahnya,
+ * melainkan mudahnya terlupa: nilai tersimpan di DUA tempat.
+ *
+ *   submissions.awarded_point  angka yang tampil di kartu peserta
+ *   score_entries.point        angka yang benar-benar dijumlahkan klasemen
+ *
+ * Mengubah salah satunya saja membuat layar menunjukkan 308 sementara
+ * peringkatnya masih dihitung dari 3080 — selisih yang baru ketahuan saat
+ * pengumuman juara. Endpoint ini mengubah keduanya dalam satu transaksi,
+ * lalu menurunkan ulang groups.score dari score_entries.
+ */
+export const updateSubmissionScore = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    const userId = req.user?.id as string;
+    await ensureSuperAdmin(userId);
+
+    const submissionId = req.params.submissionId as string;
+    const raw = req.body?.awardedPoint;
+    const point = Number(raw);
+
+    if (raw === undefined || !Number.isInteger(point) || point < 0) {
+        return next(ApiError.badRequest('awardedPoint harus bilangan bulat >= 0'));
+    }
+
+    const [submission] = await db.select().from(submissions)
+        .where(eq(submissions.id, submissionId)).limit(1);
+    if (!submission) return next(ApiError.notFound('Kiriman tidak ditemukan'));
+
+    // Kiriman yang belum disetujui tidak punya nilai untuk dibetulkan —
+    // yang dibutuhkannya validasi biasa, bukan koreksi.
+    if (submission.status !== 'APPROVED') {
+        return next(ApiError.badRequest('Hanya kiriman yang sudah disetujui yang bisa dibetulkan nilainya'));
+    }
+
+    await db.transaction(async (tx: any) => {
+        await tx.update(submissions)
+            .set({ awardedPoint: point, updatedAt: new Date() })
+            .where(eq(submissions.id, submissionId));
+
+        // Kiriman yang dulu bernilai 0 tidak meninggalkan score_entry sama
+        // sekali, jadi barisnya dibuat bila memang belum ada.
+        const [entry] = await tx.select({ id: scoreEntries.id }).from(scoreEntries)
+            .where(eq(scoreEntries.referenceId, submissionId)).limit(1);
+
+        if (entry) {
+            await tx.update(scoreEntries).set({ point }).where(eq(scoreEntries.id, entry.id));
+        } else if (point > 0) {
+            await tx.insert(scoreEntries).values({
+                id: nanoid(16),
+                groupId: submission.groupId,
+                source: 'CHALLENGE',
+                referenceId: submissionId,
+                point,
+                createdBy: userId,
+            });
+        }
+
+        await recalculateGroupScore(tx, submission.groupId);
+    });
+
+    return response(res, 200, `Nilai diperbarui menjadi ${point} poin`, {
+        submissionId,
+        awardedPoint: point,
+    });
+});
+
 export const generateGroups = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     await ensureAdmin(req.user?.id as string);
 
