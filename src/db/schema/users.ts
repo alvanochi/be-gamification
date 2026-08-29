@@ -1,4 +1,4 @@
-import { pgTable, varchar, timestamp, boolean, pgEnum } from 'drizzle-orm/pg-core';
+import { pgTable, varchar, timestamp, boolean, integer, pgEnum } from 'drizzle-orm/pg-core';
 import { groups } from './groups.ts';
 
 /**
@@ -35,4 +35,10 @@ export const users = pgTable('users', {
   // membedakan keduanya karena penilaian media sosial bergantung padanya.
   socialProfileAt: timestamp('social_profile_at', { withTimezone: true }),
   socialProfileSkipped: boolean('social_profile_skipped').default(false).notNull(),
+
+  // Jumlah postingan peserta ini, dikirim pihak eksternal yang memantau media
+  // sosial dan dicocokkan lewat username Instagram di atas. Ikut menjadi
+  // bahan nilai akhir kelompoknya — lihat src/utils/finalScore.ts.
+  socialPostCount: integer('social_post_count').default(0).notNull(),
+  socialPostCountAt: timestamp('social_post_count_at', { withTimezone: true }),
 });

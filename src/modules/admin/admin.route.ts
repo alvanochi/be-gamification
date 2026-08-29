@@ -5,6 +5,7 @@ import * as sheetController from './sheet.controller.ts';
 import * as missionSheetController from './mission-sheet.controller.ts';
 
 import authenticate from '../../middlewares/auth.middleware.ts';
+import * as finalScoreController from './final-score.controller.ts';
 
 // Lembar kerja dibaca langsung dari memori — tidak ada gunanya menyimpan
 // berkas mentahnya ke disk setelah barisnya dipindahkan ke basis data.
@@ -37,6 +38,9 @@ router.get('/monitoring/missions', adminController.getMissionMonitoring);
 router.get('/monitoring/:groupId', adminController.getGroupDetail);
 router.post('/field-results', adminController.submitFieldResult);
 router.get('/accounts', adminController.listAccounts);
+
+/** Nilai akhir: poin sistem + data media sosial dari pihak eksternal. */
+router.get('/final-scores', finalScoreController.getFinalScores);
 router.post('/accounts', adminController.createAccount);
 // Rute berjalur tetap harus mendahului yang berparameter, kalau tidak
 // "/accounts/roles" akan tertangkap sebagai userId bernama "roles".
